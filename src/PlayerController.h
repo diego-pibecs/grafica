@@ -1,11 +1,10 @@
 #pragma once
 
-#include <functional>
-
 #include <glm/glm.hpp>
 
 #include "InputState.h"
 #include "MotionState.h"
+#include "physics/controller/CharacterController.h"
 
 struct PlayerSnapshot
 {
@@ -23,29 +22,23 @@ struct PlayerSnapshot
 class PlayerController
 {
 public:
-    using CollisionResolver = std::function<glm::vec3(const glm::vec3&, const glm::vec3&, float, float)>;
-
     PlayerController();
 
-    void Update(const InputState& input, float movementYawDegrees, const CollisionResolver& collisionResolver);
+    void SetWalkableWorld(IWalkableWorld* world);
+    void Update(const InputState& input, float movementYawDegrees);
+    void SetSpawn(const glm::vec3& position, float facingYawDegrees);
 
     [[nodiscard]] const PlayerSnapshot& GetSnapshot() const noexcept;
     [[nodiscard]] glm::vec3 GetPosition() const noexcept;
     [[nodiscard]] glm::vec3 GetEyePosition() const noexcept;
     [[nodiscard]] glm::vec3 GetOrbitTarget() const noexcept;
+    [[nodiscard]] const PhysicsDebugFrame& GetPhysicsDebugFrame() const noexcept;
 
 private:
+    CharacterController characterController_;
     PlayerSnapshot snapshot_;
-    float verticalVelocity_ = 0.0f;
-    float walkSpeed_ = 3.2f;
-    float sprintMultiplier_ = 1.75f;
-    float jumpVelocity_ = 6.6f;
-    float gravity_ = -18.0f;
-    float groundHeight_ = 0.0f;
     float eyeHeight_ = 1.45f;
     float orbitTargetHeight_ = 0.95f;
-    float playerRadius_ = 0.45f;
-    float playerHeight_ = 1.80f;
 
     void RefreshDerivedPoints();
 };

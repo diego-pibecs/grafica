@@ -14,10 +14,17 @@ uniform vec3 baseColor;
 uniform sampler2D texture_diffuse1;
 uniform bool useTexture;
 uniform float shininess;
+uniform float specularStrength;
 
 void main()
 {
-    vec3 albedo = useTexture ? texture(texture_diffuse1, TexCoords).rgb : baseColor;
+    vec4 sampled = useTexture ? texture(texture_diffuse1, TexCoords) : vec4(baseColor, 1.0);
+    if (useTexture && sampled.a < 0.1)
+    {
+        discard;
+    }
+
+    vec3 albedo = sampled.rgb;
 
     vec3 norm = normalize(Normal);
     vec3 lightDir = normalize(lightPos - FragPos);
@@ -29,7 +36,7 @@ void main()
 
     vec3 ambient = ambientColor * albedo;
     vec3 diffuse = diffuseFactor * lightColor * albedo;
-    vec3 specular = specularFactor * 0.35 * lightColor;
+    vec3 specular = specularFactor * specularStrength * lightColor;
 
-    FragColor = vec4(ambient + diffuse + specular, 1.0);
+    FragColor = vec4(ambient + diffuse + specular, sampled.a);
 }

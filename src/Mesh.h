@@ -26,6 +26,7 @@ public:
     Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures = {});
 
     void Draw() const;
+    void DrawWithDepthOffset(GLint depthOffsetLocation, float depthOffset) const;
 
     [[nodiscard]] bool HasTexture() const noexcept;
 

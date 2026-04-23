@@ -1,6 +1,6 @@
 # Grafica BBB Base
 
-Plantilla base en OpenGL para macOS pensada como punto de partida común para los dos proyectos del curso. La app arranca con una escena mínima reutilizable: suelo, iluminación puntual, el perro como personaje controlable, el gato como modelo fijo al centro, cámara híbrida (`FPS` + `Orbit`), animación procedural básica y colisión simple por entidades.
+Plantilla base en OpenGL para macOS con escena visual desacoplada del sistema de navegación y movimiento. El render queda en `OpenGL`; la importación geométrica, la construcción de navmesh, el controlador del actor y el debug viven en módulos separados.
 
 ## Requisitos
 
@@ -10,6 +10,8 @@ Instala dependencias con Homebrew:
 brew install glfw glew glm assimp
 ```
 
+`Recast Navigation`, `Detour` y `ReactPhysics3D` ya vienen vendorizados en `third_party/`, así que no hace falta instalarlos aparte.
+
 ## Compilar y ejecutar
 
 ```bash
@@ -18,31 +20,31 @@ cmake --build build
 ./build/bin/grafica_bbb_base
 ```
 
-## Controles base
+## Controles
 
-- `WASD` o flechas: mover al perro sobre el plano
+- `WASD` o flechas: mover actor
 - Mouse: rotación de cámara
 - `Space`: salto
 - `Shift`: sprint
+- `E`: interactuar con la puerta apuntada por la cámara
 - `Tab`: alternar entre `FPS` y `Orbit`
 - `Esc`: liberar o capturar cursor
 - Rueda del mouse en `Orbit`: zoom
+- `F3`: debug de navmesh, bloqueadores dinámicos y actor
 - `Q`: cerrar la ventana
 
-## Comportamiento base
+## Arquitectura actual
 
-- `RedDog.obj` se usa como personaje controlable.
-- `miGato.obj` queda estático en el centro como prop bloqueante.
-- El personaje tiene `Idle`, `Walk`, `Run` y `Airborne` por animación procedural de transformación global.
-- Las colisiones usan hitboxes simples alineados a ejes para bloquear el movimiento del jugador frente a props.
-
-## Estructura
-
-- `src/`: aplicación base, input, cámara, escena y carga de modelos
-- `assets/`: shaders, modelos y texturas reutilizables
-- `third_party/SOIL2/`: carga interna de texturas
+- `src/import/`: importación desacoplada de Assimp a `ImportedModelAsset`
+- `src/navigation/`: mundo caminable basado en Recast/Detour, navmesh y bloqueadores dinámicos
+- `src/physics/controller/`: controlador cinemático del actor montado sobre el navmesh
+- `src/render/debug/`: renderer OpenGL para líneas, puntos y triángulos de debug
+- `src/BaseScene.*`: escena visual, placements, puertas interactivas y fuentes de navegación
 
 ## Notas
 
-- La escena usa un sistema de entidades configurable para que futuros modelos puedan activar o desactivar movimiento procedural y colisión.
-- La base está enfocada primero en macOS, pero el proyecto queda organizado para volver a abrir compatibilidad con Windows más adelante desde `CMake`.
+- La geometría de navegación no sale del renderer ni de buffers OpenGL.
+- La casa genera una navmesh estática; las puertas no se meten en esa navmesh.
+- Las puertas son obstáculos dinámicos: cerradas bloquean, abiertas liberan paso.
+- `garage_door.fbx` y `kitchen_door.fbx` abren con bisagra; `living-room_door.fbx` es corrediza.
+- Si una puerta abre hacia el lado incorrecto, ajusta `openAngleDegrees`, `localSlideDirection` o el lado de bisagra en `BaseScene`.

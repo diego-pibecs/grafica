@@ -65,7 +65,43 @@ if(APPLE)
   target_link_libraries(soil2 PUBLIC "-framework CoreFoundation")
 endif()
 
+add_library(recast STATIC
+  third_party/recastnavigation/Recast/Source/Recast.cpp
+  third_party/recastnavigation/Recast/Source/RecastAlloc.cpp
+  third_party/recastnavigation/Recast/Source/RecastArea.cpp
+  third_party/recastnavigation/Recast/Source/RecastAssert.cpp
+  third_party/recastnavigation/Recast/Source/RecastContour.cpp
+  third_party/recastnavigation/Recast/Source/RecastFilter.cpp
+  third_party/recastnavigation/Recast/Source/RecastLayers.cpp
+  third_party/recastnavigation/Recast/Source/RecastMesh.cpp
+  third_party/recastnavigation/Recast/Source/RecastMeshDetail.cpp
+  third_party/recastnavigation/Recast/Source/RecastRasterization.cpp
+  third_party/recastnavigation/Recast/Source/RecastRegion.cpp
+)
+target_include_directories(recast PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/recastnavigation/Recast/Include"
+)
+
+add_library(detour STATIC
+  third_party/recastnavigation/Detour/Source/DetourAlloc.cpp
+  third_party/recastnavigation/Detour/Source/DetourAssert.cpp
+  third_party/recastnavigation/Detour/Source/DetourCommon.cpp
+  third_party/recastnavigation/Detour/Source/DetourNavMesh.cpp
+  third_party/recastnavigation/Detour/Source/DetourNavMeshBuilder.cpp
+  third_party/recastnavigation/Detour/Source/DetourNavMeshQuery.cpp
+  third_party/recastnavigation/Detour/Source/DetourNode.cpp
+)
+target_include_directories(detour PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/recastnavigation/Detour/Include"
+)
+
+set(RP3D_COMPILE_TESTBED OFF CACHE BOOL "" FORCE)
+set(RP3D_COMPILE_TESTS OFF CACHE BOOL "" FORCE)
+set(RP3D_GENERATE_DOCUMENTATION OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/reactphysics3d EXCLUDE_FROM_ALL)
+
 add_executable(grafica_bbb_base
+  src/DebugLog.cpp
   src/main.cpp
   src/App.cpp
   src/BaseScene.cpp
@@ -75,6 +111,12 @@ add_executable(grafica_bbb_base
   src/PlayerController.cpp
   src/ShaderProgram.cpp
   src/TextureUtils.cpp
+  src/import/ImportedGeometry.cpp
+  src/navigation/RecastNavigationWorld.cpp
+  src/physics/assets/CollisionAsset.cpp
+  src/physics/core/ReactPhysicsWorld.cpp
+  src/physics/controller/CharacterController.cpp
+  src/render/debug/PhysicsDebugRenderer.cpp
 )
 
 target_include_directories(grafica_bbb_base PRIVATE
@@ -97,4 +139,7 @@ target_link_libraries(grafica_bbb_base PRIVATE
   ${GRAFICA_BBB_GLM_TARGET}
   ${GRAFICA_BBB_ASSIMP_TARGET}
   soil2
+  recast
+  detour
+  reactphysics3d
 )

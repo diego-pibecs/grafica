@@ -1,13 +1,17 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
+#include <future>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "BaseScene.h"
 #include "CameraController.h"
 #include "InputState.h"
 #include "PlayerController.h"
+#include "navigation/IWalkableWorld.h"
 
 struct GLFWwindow;
 
@@ -20,13 +24,23 @@ public:
     int Run();
 
 private:
+    struct PendingNavigationBuild
+    {
+        std::future<std::unique_ptr<IWalkableWorld>> future;
+    };
+
     GLFWwindow* window_ = nullptr;
     std::filesystem::path assetsRoot_;
     InputState input_;
     CameraController camera_;
     std::unique_ptr<BaseScene> scene_;
+    std::unique_ptr<IWalkableWorld> walkableWorld_;
     int framebufferWidth_ = 1280;
     int framebufferHeight_ = 720;
+    bool physicsDebugEnabled_ = false;
+    std::uint64_t frameIndex_ = 0;
+    bool traceCurrentFrame_ = false;
+    std::unique_ptr<PendingNavigationBuild> pendingNavigationBuild_;
 
     bool Init();
     void Shutdown();

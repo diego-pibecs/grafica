@@ -24,6 +24,13 @@ void CameraController::SetOrbitTarget(const glm::vec3& target)
     orbitTarget_ = target;
 }
 
+void CameraController::SetOrbitBounds(const glm::vec3& minBounds, const glm::vec3& maxBounds)
+{
+    orbitBoundsMin_ = minBounds;
+    orbitBoundsMax_ = maxBounds;
+    hasOrbitBounds_ = true;
+}
+
 void CameraController::ToggleMode()
 {
     if (mode_ == CameraMode::Fps)
@@ -93,8 +100,31 @@ void CameraController::UpdateFps(const InputState& input)
     {
         fpsYaw_ += static_cast<float>(input.mouseDeltaX) * mouseSensitivity_;
         fpsPitch_ += static_cast<float>(input.mouseDeltaY) * mouseSensitivity_;
-        ClampPitch(fpsPitch_);
     }
+
+    float yawInput = 0.0f;
+    float pitchInput = 0.0f;
+    if (input.IsKeyDown(GLFW_KEY_J))
+    {
+        yawInput -= 1.0f;
+    }
+    if (input.IsKeyDown(GLFW_KEY_L))
+    {
+        yawInput += 1.0f;
+    }
+    if (input.IsKeyDown(GLFW_KEY_I))
+    {
+        pitchInput += 1.0f;
+    }
+    if (input.IsKeyDown(GLFW_KEY_K))
+    {
+        pitchInput -= 1.0f;
+    }
+
+    const float lookDelta = keyboardLookSpeedDegrees_ * std::max(input.deltaTime, 1.0f / 60.0f);
+    fpsYaw_ += yawInput * lookDelta;
+    fpsPitch_ += pitchInput * lookDelta;
+    ClampPitch(fpsPitch_);
 }
 
 void CameraController::UpdateOrbit(const InputState& input)
@@ -103,10 +133,47 @@ void CameraController::UpdateOrbit(const InputState& input)
     {
         orbitYaw_ += static_cast<float>(input.mouseDeltaX) * mouseSensitivity_;
         orbitPitch_ -= static_cast<float>(input.mouseDeltaY) * mouseSensitivity_;
-        ClampPitch(orbitPitch_);
     }
 
+    float yawInput = 0.0f;
+    float pitchInput = 0.0f;
+    if (input.IsKeyDown(GLFW_KEY_J))
+    {
+        yawInput -= 1.0f;
+    }
+    if (input.IsKeyDown(GLFW_KEY_L))
+    {
+        yawInput += 1.0f;
+    }
+    if (input.IsKeyDown(GLFW_KEY_I))
+    {
+        pitchInput += 1.0f;
+    }
+    if (input.IsKeyDown(GLFW_KEY_K))
+    {
+        pitchInput -= 1.0f;
+    }
+
+    const float lookDelta = keyboardLookSpeedDegrees_ * std::max(input.deltaTime, 1.0f / 60.0f);
+    orbitYaw_ += yawInput * lookDelta;
+    orbitPitch_ += pitchInput * lookDelta;
+    ClampPitch(orbitPitch_);
+
+    float keyboardZoomDirection = 0.0f;
+    if (input.IsKeyDown(GLFW_KEY_EQUAL) || input.IsKeyDown(GLFW_KEY_KP_ADD))
+    {
+        keyboardZoomDirection += 1.0f;
+    }
+    if (input.IsKeyDown(GLFW_KEY_MINUS) || input.IsKeyDown(GLFW_KEY_KP_SUBTRACT))
+    {
+        keyboardZoomDirection -= 1.0f;
+    }
+
+    const float keyboardZoomAmount =
+        keyboardZoomDirection * orbitZoomSpeed_ * std::max(input.deltaTime, 1.0f / 60.0f) * 6.0f;
+
     orbitRadius_ -= static_cast<float>(input.scrollDeltaY) * orbitZoomSpeed_;
+    orbitRadius_ -= keyboardZoomAmount;
     orbitRadius_ = std::clamp(orbitRadius_, 2.5f, 20.0f);
 }
 
@@ -130,8 +197,17 @@ glm::vec3 CameraController::GetOrbitPosition() const
     const float pitchRadians = glm::radians(orbitPitch_);
     const float horizontalRadius = orbitRadius_ * std::cos(pitchRadians);
 
-    return orbitTarget_ + glm::vec3(
+    glm::vec3 position = orbitTarget_ + glm::vec3(
         horizontalRadius * std::cos(yawRadians),
         orbitRadius_ * std::sin(pitchRadians),
         horizontalRadius * std::sin(yawRadians));
+
+    if (hasOrbitBounds_)
+    {
+        position.x = std::clamp(position.x, orbitBoundsMin_.x + orbitBoundsMargin_, orbitBoundsMax_.x - orbitBoundsMargin_);
+        position.y = std::clamp(position.y, orbitBoundsMin_.y + orbitBoundsMargin_, orbitBoundsMax_.y - orbitBoundsMargin_);
+        position.z = std::clamp(position.z, orbitBoundsMin_.z + orbitBoundsMargin_, orbitBoundsMax_.z - orbitBoundsMargin_);
+    }
+
+    return position;
 }

@@ -12,10 +12,20 @@ Mesh::Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std:
 
 void Mesh::Draw() const
 {
+    DrawWithDepthOffset(-1, 0.0f);
+}
+
+void Mesh::DrawWithDepthOffset(GLint depthOffsetLocation, float depthOffset) const
+{
     if (!textures_.empty())
     {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, textures_.front().id);
+    }
+
+    if (depthOffsetLocation >= 0)
+    {
+        glUniform1f(depthOffsetLocation, depthOffset);
     }
 
     glBindVertexArray(vao_);

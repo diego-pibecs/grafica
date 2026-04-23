@@ -17,6 +17,7 @@ public:
 
     void SetPlayerAnchor(const glm::vec3& anchor);
     void SetOrbitTarget(const glm::vec3& target);
+    void SetOrbitBounds(const glm::vec3& minBounds, const glm::vec3& maxBounds);
     void ToggleMode();
     void Update(const InputState& input);
 
@@ -38,7 +39,12 @@ private:
     float orbitRadius_ = 5.5f;
     float orbitZoomSpeed_ = 1.2f;
     float mouseSensitivity_ = 0.12f;
+    float keyboardLookSpeedDegrees_ = 110.0f;
     float fovDegrees_ = 45.0f;
+    bool hasOrbitBounds_ = false;
+    glm::vec3 orbitBoundsMin_ { -1000.0f, -1000.0f, -1000.0f };
+    glm::vec3 orbitBoundsMax_ { 1000.0f, 1000.0f, 1000.0f };
+    float orbitBoundsMargin_ = 0.35f;
 
     void UpdateFps(const InputState& input);
     void UpdateOrbit(const InputState& input);

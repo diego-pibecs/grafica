@@ -1,6 +1,5 @@
 #include "PlayerController.h"
 
-#include <algorithm>
 #include <cmath>
 
 #include <glm/glm.hpp>
@@ -12,14 +11,33 @@ constexpr glm::vec3 kWorldUp(0.0f, 1.0f, 0.0f);
 
 PlayerController::PlayerController()
 {
+    eyeHeight_ = characterController_.GetParams().eyeHeight;
+    orbitTargetHeight_ = characterController_.GetParams().orbitTargetHeight;
     RefreshDerivedPoints();
 }
 
-void PlayerController::Update(const InputState& input, float movementYawDegrees, const CollisionResolver& collisionResolver)
+void PlayerController::SetWalkableWorld(IWalkableWorld* world)
+{
+    characterController_.SetWalkableWorld(world);
+}
+
+void PlayerController::SetSpawn(const glm::vec3& position, float facingYawDegrees)
+{
+    characterController_.SetSpawn(position);
+    snapshot_.position = position;
+    snapshot_.facingYawDegrees = facingYawDegrees;
+    snapshot_.velocity = glm::vec3(0.0f);
+    snapshot_.horizontalSpeed = 0.0f;
+    snapshot_.motionState = MotionState::Idle;
+    snapshot_.grounded = true;
+    snapshot_.sprinting = false;
+    RefreshDerivedPoints();
+}
+
+void PlayerController::Update(const InputState& input, float movementYawDegrees)
 {
     const bool sprinting = input.IsKeyDown(GLFW_KEY_LEFT_SHIFT) || input.IsKeyDown(GLFW_KEY_RIGHT_SHIFT);
     snapshot_.sprinting = sprinting;
-    const glm::vec3 previousPosition = snapshot_.position;
 
     const float yawRadians = glm::radians(movementYawDegrees);
     const glm::vec3 forward(std::cos(yawRadians), 0.0f, std::sin(yawRadians));
@@ -49,42 +67,22 @@ void PlayerController::Update(const InputState& input, float movementYawDegrees,
     if (glm::dot(movementDirection, movementDirection) > 0.0f)
     {
         movementDirection = glm::normalize(movementDirection);
-        const float currentSpeed = sprinting ? walkSpeed_ * sprintMultiplier_ : walkSpeed_;
-        const glm::vec3 desiredPosition = snapshot_.position + (movementDirection * currentSpeed * input.deltaTime);
-        if (collisionResolver)
-        {
-            snapshot_.position = collisionResolver(snapshot_.position, desiredPosition, playerRadius_, playerHeight_);
-        }
-        else
-        {
-            snapshot_.position = desiredPosition;
-        }
         snapshot_.facingYawDegrees = glm::degrees(std::atan2(movementDirection.z, movementDirection.x));
     }
 
-    if (snapshot_.grounded && input.WasKeyPressed(GLFW_KEY_SPACE))
-    {
-        snapshot_.grounded = false;
-        verticalVelocity_ = jumpVelocity_;
-    }
+    CharacterMoveRequest request;
+    request.wishMove = movementDirection;
+    request.wishMoveScale = glm::length(movementDirection) > 0.0f ? 1.0f : 0.0f;
+    request.sprintRequested = sprinting;
+    request.jumpRequested = input.WasKeyPressed(GLFW_KEY_SPACE);
+    request.dt = input.deltaTime;
+    characterController_.Update(request);
 
-    if (!snapshot_.grounded || verticalVelocity_ != 0.0f)
-    {
-        verticalVelocity_ += gravity_ * input.deltaTime;
-        snapshot_.position.y += verticalVelocity_ * input.deltaTime;
-
-        if (snapshot_.position.y <= groundHeight_)
-        {
-            snapshot_.position.y = groundHeight_;
-            verticalVelocity_ = 0.0f;
-            snapshot_.grounded = true;
-        }
-    }
-
-    snapshot_.velocity = (input.deltaTime > 0.0f)
-        ? (snapshot_.position - previousPosition) / input.deltaTime
-        : glm::vec3(0.0f);
-    snapshot_.horizontalSpeed = glm::length(glm::vec2(snapshot_.velocity.x, snapshot_.velocity.z));
+    const CharacterState& characterState = characterController_.GetState();
+    snapshot_.position = characterState.position;
+    snapshot_.velocity = characterState.velocity;
+    snapshot_.grounded = characterState.grounded;
+    snapshot_.horizontalSpeed = glm::length(glm::vec2(characterState.velocity.x, characterState.velocity.z));
 
     if (!snapshot_.grounded)
     {
@@ -120,6 +118,11 @@ glm::vec3 PlayerController::GetEyePosition() const noexcept
 glm::vec3 PlayerController::GetOrbitTarget() const noexcept
 {
     return snapshot_.orbitTarget;
+}
+
+const PhysicsDebugFrame& PlayerController::GetPhysicsDebugFrame() const noexcept
+{
+    return characterController_.GetDebugFrame();
 }
 
 void PlayerController::RefreshDerivedPoints()
