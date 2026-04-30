@@ -7,6 +7,9 @@
 #include <utility>
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
+#include <sstream>
+#include <thread>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -22,9 +25,17 @@
 
 namespace
 {
+constexpr double kTargetFrameMs = 1000.0 / 60.0;
+constexpr double kLimiterSpinWaitMs = 0.9;
+
 bool ShouldTraceFrame(std::uint64_t frameIndex)
 {
-    return frameIndex <= 180u || (frameIndex % 120u) == 0u;
+    return frameIndex <= 12u || (frameIndex % 600u) == 0u;
+}
+
+double MillisecondsSince(const std::chrono::steady_clock::time_point& begin)
+{
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
 }
 
 void MergeDebugFrame(PhysicsDebugFrame& destination, const PhysicsDebugFrame& source)
@@ -54,8 +65,25 @@ int App::Run()
         return EXIT_FAILURE;
     }
 
+    std::uint64_t perfWindowFrames = 0;
+    double perfWindowSeconds = 0.0;
+    double perfWorstFrameSeconds = 0.0;
+    double perfPollMs = 0.0;
+    double perfUpdateMs = 0.0;
+    double perfRenderMs = 0.0;
+    double perfSwapMs = 0.0;
+    double perfLimiterSleepMs = 0.0;
+    double perfFrameWallMs = 0.0;
+    double perfWorstPollMs = 0.0;
+    double perfWorstUpdateMs = 0.0;
+    double perfWorstRenderMs = 0.0;
+    double perfWorstSwapMs = 0.0;
+    double perfWorstLimiterSleepMs = 0.0;
+    double perfWorstFrameWallMs = 0.0;
+
     while (!glfwWindowShouldClose(window_))
     {
+        const auto frameBegin = std::chrono::steady_clock::now();
         ++frameIndex_;
         traceCurrentFrame_ = ShouldTraceFrame(frameIndex_);
         if (traceCurrentFrame_)
@@ -68,23 +96,116 @@ int App::Run()
         {
             DebugLog::Info("Frame", "glfwPollEvents()");
         }
+        const auto pollBegin = std::chrono::steady_clock::now();
         glfwPollEvents();
+        const double pollMs = MillisecondsSince(pollBegin);
         if (traceCurrentFrame_)
         {
             DebugLog::Info("Frame", "Update()");
         }
+        const auto updateBegin = std::chrono::steady_clock::now();
         Update();
+        const double updateMs = MillisecondsSince(updateBegin);
         if (traceCurrentFrame_)
         {
             DebugLog::Info("Frame", "Render()");
         }
+        const auto renderBegin = std::chrono::steady_clock::now();
         Render();
+        const double renderMs = MillisecondsSince(renderBegin);
         if (traceCurrentFrame_)
         {
             DebugLog::Info("Frame", "glfwSwapBuffers()");
         }
+        const auto swapBegin = std::chrono::steady_clock::now();
         glfwSwapBuffers(window_);
+        const double swapMs = MillisecondsSince(swapBegin);
         input_.EndFrame();
+
+        double limiterSleepMs = 0.0;
+        const double activeFrameMs = MillisecondsSince(frameBegin);
+        if (activeFrameMs < kTargetFrameMs)
+        {
+            const auto sleepBegin = std::chrono::steady_clock::now();
+            const double coarseSleepMs = kTargetFrameMs - activeFrameMs - kLimiterSpinWaitMs;
+            if (coarseSleepMs > 0.0)
+            {
+                std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(coarseSleepMs));
+            }
+            while (MillisecondsSince(frameBegin) < kTargetFrameMs)
+            {
+                std::this_thread::yield();
+            }
+            limiterSleepMs = MillisecondsSince(sleepBegin);
+        }
+        const double frameWallMs = MillisecondsSince(frameBegin);
+
+        perfWindowFrames += 1u;
+        perfWindowSeconds += static_cast<double>(input_.deltaTime);
+        perfWorstFrameSeconds = std::max(perfWorstFrameSeconds, static_cast<double>(input_.deltaTime));
+        perfPollMs += pollMs;
+        perfUpdateMs += updateMs;
+        perfRenderMs += renderMs;
+        perfSwapMs += swapMs;
+        perfLimiterSleepMs += limiterSleepMs;
+        perfFrameWallMs += frameWallMs;
+        perfWorstPollMs = std::max(perfWorstPollMs, pollMs);
+        perfWorstUpdateMs = std::max(perfWorstUpdateMs, updateMs);
+        perfWorstRenderMs = std::max(perfWorstRenderMs, renderMs);
+        perfWorstSwapMs = std::max(perfWorstSwapMs, swapMs);
+        perfWorstLimiterSleepMs = std::max(perfWorstLimiterSleepMs, limiterSleepMs);
+        perfWorstFrameWallMs = std::max(perfWorstFrameWallMs, frameWallMs);
+
+        if (perfWindowFrames >= 120u || input_.deltaTime >= 0.03f)
+        {
+            const double averageFrameSeconds = perfWindowFrames > 0u
+                ? perfWindowSeconds / static_cast<double>(perfWindowFrames)
+                : 0.0;
+            const double averageFps = averageFrameSeconds > 0.0 ? 1.0 / averageFrameSeconds : 0.0;
+            const double worstFps = perfWorstFrameSeconds > 0.0 ? 1.0 / perfWorstFrameSeconds : 0.0;
+            displayedFps_ = averageFps;
+            if (performanceTitleEnabled_)
+            {
+                UpdateWindowTitle();
+            }
+            DebugLog::Info(
+                "Perf",
+                "Frame avgFps=", averageFps,
+                " avgMs=", averageFrameSeconds * 1000.0,
+                " worstMs=", perfWorstFrameSeconds * 1000.0,
+                " worstFps=", worstFps,
+                " wallAvgMs=", perfFrameWallMs / static_cast<double>(perfWindowFrames),
+                " wallMaxMs=", perfWorstFrameWallMs,
+                " pollAvgMs=", perfPollMs / static_cast<double>(perfWindowFrames),
+                " pollMaxMs=", perfWorstPollMs,
+                " updateAvgMs=", perfUpdateMs / static_cast<double>(perfWindowFrames),
+                " updateMaxMs=", perfWorstUpdateMs,
+                " renderAvgMs=", perfRenderMs / static_cast<double>(perfWindowFrames),
+                " renderMaxMs=", perfWorstRenderMs,
+                " swapAvgMs=", perfSwapMs / static_cast<double>(perfWindowFrames),
+                " swapMaxMs=", perfWorstSwapMs,
+                " limiterSleepAvgMs=", perfLimiterSleepMs / static_cast<double>(perfWindowFrames),
+                " limiterSleepMaxMs=", perfWorstLimiterSleepMs,
+                " camera=(", camera_.GetPosition().x, ", ", camera_.GetPosition().y, ", ", camera_.GetPosition().z, ")",
+                " mouseCaptured=", input_.mouseCaptured,
+                " navPending=", (pendingNavigationBuild_ != nullptr));
+
+            perfWindowFrames = 0u;
+            perfWindowSeconds = 0.0;
+            perfWorstFrameSeconds = 0.0;
+            perfPollMs = 0.0;
+            perfUpdateMs = 0.0;
+            perfRenderMs = 0.0;
+            perfSwapMs = 0.0;
+            perfLimiterSleepMs = 0.0;
+            perfFrameWallMs = 0.0;
+            perfWorstPollMs = 0.0;
+            perfWorstUpdateMs = 0.0;
+            perfWorstRenderMs = 0.0;
+            perfWorstSwapMs = 0.0;
+            perfWorstLimiterSleepMs = 0.0;
+            perfWorstFrameWallMs = 0.0;
+        }
 
         if (traceCurrentFrame_)
         {
@@ -115,7 +236,7 @@ bool App::Init()
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
     DebugLog::Info("App", "Creating GLFW window ", framebufferWidth_, "x", framebufferHeight_);
-    window_ = glfwCreateWindow(framebufferWidth_, framebufferHeight_, "Grafica BBB Base", nullptr, nullptr);
+    window_ = glfwCreateWindow(framebufferWidth_, framebufferHeight_, "Experiencia TOC interactiva", nullptr, nullptr);
     if (window_ == nullptr)
     {
         std::cerr << "Failed to create GLFW window\n";
@@ -129,6 +250,7 @@ bool App::Init()
     glfwSwapInterval(1);
     glfwSetWindowUserPointer(window_, this);
     DebugLog::Info("App", "OpenGL context current and swap interval set");
+    DebugLog::Info("App", "Frame limiter targetMs=", kTargetFrameMs, " targetFps=60");
 
     glfwSetFramebufferSizeCallback(window_, FramebufferSizeCallback);
     glfwSetKeyCallback(window_, KeyCallback);
@@ -144,6 +266,27 @@ bool App::Init()
         return false;
     }
     DebugLog::Info("App", "GLEW initialized");
+
+    const auto glString = [](GLenum name) -> const char*
+    {
+        const GLubyte* value = glGetString(name);
+        return value != nullptr ? reinterpret_cast<const char*>(value) : "unknown";
+    };
+    GLint maxTextureUnits = 0;
+    GLint maxCubeMapSize = 0;
+    GLint maxTextureSize = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
+    glGetIntegerv(GL_MAX_CUBE_MAP_TEXTURE_SIZE, &maxCubeMapSize);
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+    DebugLog::Info(
+        "GL",
+        "vendor=", glString(GL_VENDOR),
+        " renderer=", glString(GL_RENDERER),
+        " version=", glString(GL_VERSION),
+        " glsl=", glString(GL_SHADING_LANGUAGE_VERSION),
+        " maxTextureUnits=", maxTextureUnits,
+        " maxTextureSize=", maxTextureSize,
+        " maxCubeMapSize=", maxCubeMapSize);
 
     glfwGetFramebufferSize(window_, &framebufferWidth_, &framebufferHeight_);
     glViewport(0, 0, framebufferWidth_, framebufferHeight_);
@@ -183,11 +326,19 @@ bool App::Init()
                 auto walkableWorld = std::make_unique<RecastNavigationWorld>();
                 WalkableBuildSettings settings;
                 settings.agentHeight = 1.80f;
-                settings.agentRadius = 0.35f;
-                settings.agentMaxClimb = 0.30f;
+                settings.agentRadius = 0.22f;
+                settings.agentMaxClimb = 0.40f;
                 settings.agentMaxSlopeDegrees = 45.0f;
                 settings.cellSize = 0.12f;
-                settings.cellHeight = 0.08f;
+                settings.cellHeight = 0.06f;
+                DebugLog::Info(
+                    "AsyncNav",
+                    "Settings agentHeight=", settings.agentHeight,
+                    " agentRadius=", settings.agentRadius,
+                    " agentMaxClimb=", settings.agentMaxClimb,
+                    " maxSlope=", settings.agentMaxSlopeDegrees,
+                    " cellSize=", settings.cellSize,
+                    " cellHeight=", settings.cellHeight);
                 if (!walkableWorld->Build(importedAssets, staticRegions, settings))
                 {
                     DebugLog::Error("AsyncNav", "Navmesh build failed");
@@ -303,8 +454,13 @@ void App::Update()
     if (input_.WasKeyPressed(GLFW_KEY_F3))
     {
         physicsDebugEnabled_ = !physicsDebugEnabled_;
+        performanceTitleEnabled_ = !performanceTitleEnabled_;
         scene_->SetPhysicsDebugEnabled(physicsDebugEnabled_);
-        DebugLog::Info("Update", "F3 pressed, physicsDebugEnabled=", physicsDebugEnabled_);
+        UpdateWindowTitle();
+        DebugLog::Info(
+            "Update",
+            "F3 pressed, physicsDebugEnabled=", physicsDebugEnabled_,
+            " performanceTitleEnabled=", performanceTitleEnabled_);
     }
 
     if (traceCurrentFrame_)
@@ -396,9 +552,7 @@ void App::SetMouseCaptured(bool captured)
 
 void App::UpdateWindowTitle() const
 {
-    const std::string modeLabel = camera_.GetMode() == CameraMode::Fps ? "FPS" : "Orbit";
-    const std::string title = "Grafica BBB Base | " + modeLabel + " | " + scene_->GetActiveModelLabel();
-    glfwSetWindowTitle(window_, title.c_str());
+    glfwSetWindowTitle(window_, "Experiencia TOC interactiva");
 }
 
 void App::FramebufferSizeCallback(GLFWwindow* window, int width, int height)

@@ -233,6 +233,14 @@ void Model::Draw() const
     }
 }
 
+void Model::DrawWithoutTextures() const
+{
+    for (const Mesh& mesh : meshes_)
+    {
+        mesh.DrawWithoutTextures();
+    }
+}
+
 bool Model::IsLoaded() const noexcept
 {
     return isLoaded_;

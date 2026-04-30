@@ -15,9 +15,19 @@ void Mesh::Draw() const
     DrawWithDepthOffset(-1, 0.0f);
 }
 
+void Mesh::DrawWithoutTextures() const
+{
+    DrawInternal(-1, 0.0f, false);
+}
+
 void Mesh::DrawWithDepthOffset(GLint depthOffsetLocation, float depthOffset) const
 {
-    if (!textures_.empty())
+    DrawInternal(depthOffsetLocation, depthOffset, true);
+}
+
+void Mesh::DrawInternal(GLint depthOffsetLocation, float depthOffset, bool bindTextures) const
+{
+    if (bindTextures && !textures_.empty())
     {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, textures_.front().id);
@@ -32,7 +42,7 @@ void Mesh::DrawWithDepthOffset(GLint depthOffsetLocation, float depthOffset) con
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices_.size()), GL_UNSIGNED_INT, nullptr);
     glBindVertexArray(0);
 
-    if (!textures_.empty())
+    if (bindTextures && !textures_.empty())
     {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, 0);

@@ -585,7 +585,7 @@ bool RecastNavigationWorld::Build(
     config.ch = buildSettings_.cellHeight;
     config.walkableSlopeAngle = buildSettings_.agentMaxSlopeDegrees;
     config.walkableHeight = static_cast<int>(std::ceil(buildSettings_.agentHeight / config.ch));
-    config.walkableClimb = static_cast<int>(std::floor(buildSettings_.agentMaxClimb / config.ch));
+    config.walkableClimb = static_cast<int>(std::ceil(buildSettings_.agentMaxClimb / config.ch));
     config.walkableRadius = static_cast<int>(std::ceil(buildSettings_.agentRadius / config.cs));
     config.maxEdgeLen = static_cast<int>(buildSettings_.edgeMaxLen / config.cs);
     config.maxSimplificationError = buildSettings_.edgeMaxError;
@@ -599,6 +599,23 @@ bool RecastNavigationWorld::Build(
     SetRecastVector(config.bmin, geometry.bounds.min);
     SetRecastVector(config.bmax, geometry.bounds.max);
     rcCalcGridSize(config.bmin, config.bmax, config.cs, &config.width, &config.height);
+    DebugLog::Info(
+        "RecastNav",
+        "Config cs=", config.cs,
+        " ch=", config.ch,
+        " width=", config.width,
+        " height=", config.height,
+        " walkableHeightCells=", config.walkableHeight,
+        " walkableClimbCells=", config.walkableClimb,
+        " walkableClimbWorld=", static_cast<float>(config.walkableClimb) * config.ch,
+        " walkableRadiusCells=", config.walkableRadius,
+        " walkableRadiusWorld=", static_cast<float>(config.walkableRadius) * config.cs,
+        " slope=", config.walkableSlopeAngle,
+        " boundsMin=(",
+        geometry.bounds.min.x, ", ", geometry.bounds.min.y, ", ", geometry.bounds.min.z,
+        ") boundsMax=(",
+        geometry.bounds.max.x, ", ", geometry.bounds.max.y, ", ", geometry.bounds.max.z,
+        ")");
 
     RecastBuildContext context;
     RecastBuildScratch scratch;

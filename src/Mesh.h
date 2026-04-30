@@ -26,6 +26,7 @@ public:
     Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures = {});
 
     void Draw() const;
+    void DrawWithoutTextures() const;
     void DrawWithDepthOffset(GLint depthOffsetLocation, float depthOffset) const;
 
     [[nodiscard]] bool HasTexture() const noexcept;
@@ -38,5 +39,6 @@ private:
     GLuint vbo_ = 0;
     GLuint ebo_ = 0;
 
+    void DrawInternal(GLint depthOffsetLocation, float depthOffset, bool bindTextures) const;
     void SetupMesh();
 };

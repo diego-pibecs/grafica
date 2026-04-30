@@ -25,6 +25,7 @@ public:
     explicit Model(const std::filesystem::path& path, bool loadTextures = true);
 
     void Draw() const;
+    void DrawWithoutTextures() const;
 
     [[nodiscard]] bool IsLoaded() const noexcept;
     [[nodiscard]] bool HasTextures() const noexcept;

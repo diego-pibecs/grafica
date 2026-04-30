@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -12,6 +13,7 @@
 #include <utility>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/constants.hpp>
 
 #include "CameraController.h"
 #include "DebugLog.h"
@@ -21,6 +23,14 @@
 namespace
 {
 namespace fs = std::filesystem;
+
+constexpr int kMaxPointLights = 12;
+constexpr int kPointShadowTextureUnitOffset = 2;
+
+double MillisecondsSince(const std::chrono::steady_clock::time_point& begin)
+{
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+}
 
 std::string ToLowerAscii(std::string value)
 {
@@ -202,15 +212,16 @@ std::array<glm::vec3, 4> BuildBoundaryWallCenters(
     float wallHeight,
     float wallThickness)
 {
+    (void)wallThickness;
     const float centerZ = (sceneMin.z + sceneMax.z) * 0.5f;
     const float centerX = (sceneMin.x + sceneMax.x) * 0.5f;
     const float wallY = wallHeight * 0.5f;
 
     return {
-        glm::vec3(sceneMin.x - (wallThickness * 0.5f), wallY, centerZ),
-        glm::vec3(sceneMax.x + (wallThickness * 0.5f), wallY, centerZ),
-        glm::vec3(centerX, wallY, sceneMin.z - (wallThickness * 0.5f)),
-        glm::vec3(centerX, wallY, sceneMax.z + (wallThickness * 0.5f))
+        glm::vec3(sceneMin.x, wallY, centerZ),
+        glm::vec3(sceneMax.x, wallY, centerZ),
+        glm::vec3(centerX, wallY, sceneMin.z),
+        glm::vec3(centerX, wallY, sceneMax.z)
     };
 }
 }
@@ -220,12 +231,40 @@ BaseScene::BaseScene(std::filesystem::path assetsRoot)
 {
 }
 
+BaseScene::~BaseScene()
+{
+    if (shadowMapTexture_ != 0)
+    {
+        glDeleteTextures(1, &shadowMapTexture_);
+        shadowMapTexture_ = 0;
+    }
+
+    if (shadowMapFramebuffer_ != 0)
+    {
+        glDeleteFramebuffers(1, &shadowMapFramebuffer_);
+        shadowMapFramebuffer_ = 0;
+    }
+
+    ReleasePointLightShadowMaps();
+    if (pointShadowFramebuffer_ != 0)
+    {
+        glDeleteFramebuffers(1, &pointShadowFramebuffer_);
+        pointShadowFramebuffer_ = 0;
+    }
+}
+
 void BaseScene::Init()
 {
     DebugLog::ScopedTrace trace("BaseScene", "Init");
     litShader_ = std::make_unique<ShaderProgram>(
         assetsRoot_ / "shaders" / "lit.vs",
         assetsRoot_ / "shaders" / "lit.frag");
+    shadowDepthShader_ = std::make_unique<ShaderProgram>(
+        assetsRoot_ / "shaders" / "shadow_depth.vs",
+        assetsRoot_ / "shaders" / "shadow_depth.frag");
+    pointShadowDepthShader_ = std::make_unique<ShaderProgram>(
+        assetsRoot_ / "shaders" / "point_shadow_depth.vs",
+        assetsRoot_ / "shaders" / "point_shadow_depth.frag");
     lightMarkerShader_ = std::make_unique<ShaderProgram>(
         assetsRoot_ / "shaders" / "light_marker.vs",
         assetsRoot_ / "shaders" / "light_marker.frag");
@@ -239,24 +278,59 @@ void BaseScene::Init()
     const float wallLengthZ = (sceneBoundsMax_.z - sceneBoundsMin_.z) + (boundaryWallThickness_ * 2.0f);
     const float wallLengthX = (sceneBoundsMax_.x - sceneBoundsMin_.x) + (boundaryWallThickness_ * 2.0f);
     floorMesh_ = std::make_unique<Mesh>(CreateFloorMesh(grassTexture, floorHalfExtents_, floorUvTiling_));
-    boundarySideWallMesh_ = std::make_unique<Mesh>(CreateTexturedBoxMesh(
+    boundarySideWallMesh_ = std::make_unique<Mesh>(CreateTexturedWallPlaneMesh(
         fenceTexture,
         "fence-texture.png",
-        glm::vec3(boundaryWallThickness_, boundaryWallHeight_, wallLengthZ),
-        6.0f));
-    boundaryEndWallMesh_ = std::make_unique<Mesh>(CreateTexturedBoxMesh(
+        glm::vec2(wallLengthZ, boundaryWallHeight_),
+        6.0f,
+        false));
+    boundaryEndWallMesh_ = std::make_unique<Mesh>(CreateTexturedWallPlaneMesh(
         fenceTexture,
         "fence-texture.png",
-        glm::vec3(wallLengthX, boundaryWallHeight_, boundaryWallThickness_),
-        6.0f));
-    lightMarkerMesh_ = std::make_unique<Mesh>(CreateCubeMesh());
+        glm::vec2(wallLengthX, boundaryWallHeight_),
+        6.0f,
+        true));
+    lightMarkerMesh_ = std::make_unique<Mesh>(CreateSphereMesh(10, 14));
     skyboxMesh_ = std::make_unique<Mesh>(CreateCubeMesh());
 
     skyCloudTextureA_ = LoadTexture2D(assetsRoot_ / "textures" / "skybox" / "434P-111_town_sky_cloud_A.png");
     skyCloudTextureB_ = LoadTexture2D(assetsRoot_ / "textures" / "skybox" / "434P-111_town_sky_cloud_D.png");
+
+    glGenFramebuffers(1, &shadowMapFramebuffer_);
+    glGenTextures(1, &shadowMapTexture_);
+    glBindTexture(GL_TEXTURE_2D, shadowMapTexture_);
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_DEPTH_COMPONENT24,
+        shadowMapResolution_,
+        shadowMapResolution_,
+        0,
+        GL_DEPTH_COMPONENT,
+        GL_FLOAT,
+        nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    const float borderColor[] { 1.0f, 1.0f, 1.0f, 1.0f };
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowMapFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowMapTexture_, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    {
+        throw std::runtime_error("No se pudo inicializar el framebuffer de sombras.");
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    glGenFramebuffers(1, &pointShadowFramebuffer_);
     DebugLog::Info("BaseScene", "Core shaders and textures loaded");
 
     LoadEntities();
+    ConfigureSceneLights();
     DebugLog::Info("BaseScene", "Init complete with ", entities_.size(), " visual entit(ies)");
 }
 
@@ -284,14 +358,36 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
 {
     static std::uint64_t renderCallCount = 0;
     ++renderCallCount;
-    const bool traceRenderCall = renderCallCount <= 180u || (renderCallCount % 120u) == 0u;
+    const bool traceRenderCall = renderCallCount <= 12u || (renderCallCount % 600u) == 0u;
+    const auto renderBegin = std::chrono::steady_clock::now();
     if (traceRenderCall)
     {
         DebugLog::Info("BaseScene", "Render call ", renderCallCount, " begin");
     }
 
     const glm::mat4 view = camera.GetViewMatrix();
+    const glm::mat4 lightSpaceMatrix = BuildSunLightSpaceMatrix();
 
+    double shadowMs = 0.0;
+    bool shadowUpdated = false;
+    if (shadowMapDirty_ || pointShadowMapsDirty_)
+    {
+        const auto shadowBegin = std::chrono::steady_clock::now();
+        if (shadowMapDirty_)
+        {
+            RenderShadowMap(lightSpaceMatrix);
+            shadowMapDirty_ = false;
+        }
+        if (pointShadowMapsDirty_)
+        {
+            RenderPointShadowMaps();
+            pointShadowMapsDirty_ = false;
+        }
+        shadowMs = MillisecondsSince(shadowBegin);
+        shadowUpdated = true;
+    }
+
+    const auto skyboxBegin = std::chrono::steady_clock::now();
     glDepthMask(GL_FALSE);
     glDepthFunc(GL_LEQUAL);
     skyboxShader_->Use();
@@ -318,104 +414,93 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
     {
         DebugLog::Info("BaseScene", "Render call ", renderCallCount, " skybox done");
     }
+    const double skyboxMs = MillisecondsSince(skyboxBegin);
 
+    const auto litBegin = std::chrono::steady_clock::now();
     litShader_->Use();
     litShader_->SetMat4("projection", projection);
     litShader_->SetMat4("view", view);
-    litShader_->SetVec3("lightPos", lightPosition_);
+    litShader_->SetMat4("lightSpaceMatrix", lightSpaceMatrix);
     litShader_->SetVec3("viewPos", camera.GetPosition());
-    litShader_->SetVec3("lightColor", glm::vec3(1.0f, 0.96f, 0.90f));
-    litShader_->SetVec3("ambientColor", glm::vec3(0.18f, 0.20f, 0.24f));
+    litShader_->SetVec3("sunDirection", glm::normalize(sunDirection_));
+    litShader_->SetVec3("sunColor", sunColor_);
+    litShader_->SetVec3("skyAmbientColor", ambientSkyColor_);
+    litShader_->SetVec3("groundAmbientColor", ambientGroundColor_);
     litShader_->SetFloat("shininess", 24.0f);
     litShader_->SetInt("texture_diffuse1", 0);
+    litShader_->SetInt("shadowMap", 1);
+    litShader_->SetBool("shadowsEnabled", shadowMapTexture_ != 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, shadowMapTexture_);
 
-    litShader_->SetBool("useTexture", true);
-    litShader_->SetFloat("specularStrength", 0.0f);
-    litShader_->SetVec3("baseColor", glm::vec3(1.0f));
-    litShader_->SetMat4("model", glm::mat4(1.0f));
-    floorMesh_->Draw();
-    if (traceRenderCall)
+    const glm::vec3 cameraPosition = camera.GetPosition();
+    const std::size_t activeLightCount = std::min(pointLights_.size(), static_cast<std::size_t>(kMaxPointLights));
+    if (pointLights_.size() > static_cast<std::size_t>(kMaxPointLights) && traceRenderCall)
     {
-        DebugLog::Info("BaseScene", "Render call ", renderCallCount, " floor done");
+        DebugLog::Info("BaseScene", "Point light count exceeds shader cap: ", pointLights_.size(), " > ", kMaxPointLights);
     }
 
-    if (boundarySideWallMesh_ != nullptr && boundaryEndWallMesh_ != nullptr)
+    const int pointLightCount = static_cast<int>(activeLightCount);
+    litShader_->SetInt("pointLightCount", pointLightCount);
+    litShader_->SetBool("pointShadowsEnabled", pointShadowFramebuffer_ != 0);
+    for (int index = 0; index < kMaxPointLights; ++index)
     {
-        litShader_->SetBool("useTexture", true);
-        litShader_->SetFloat("specularStrength", 0.0f);
-        litShader_->SetVec3("baseColor", glm::vec3(1.0f));
-        const std::array<glm::vec3, 4> wallCenters = BuildBoundaryWallCenters(
-            sceneBoundsMin_,
-            sceneBoundsMax_,
-            boundaryWallHeight_,
-            boundaryWallThickness_);
-        for (std::size_t wallIndex = 0; wallIndex < wallCenters.size(); ++wallIndex)
+        const std::string prefix = "pointLights[" + std::to_string(index) + "]";
+        const std::string shadowPrefix = "pointShadowMaps[" + std::to_string(index) + "]";
+        litShader_->SetInt(shadowPrefix, kPointShadowTextureUnitOffset + index);
+        if (index < pointLightCount)
         {
-            litShader_->SetMat4("model", glm::translate(glm::mat4(1.0f), wallCenters[wallIndex]));
-            if (wallIndex < 2u)
-            {
-                boundarySideWallMesh_->Draw();
-            }
-            else
-            {
-                boundaryEndWallMesh_->Draw();
-            }
+            const PointLight& pointLight = pointLights_[static_cast<std::size_t>(index)];
+            litShader_->SetVec3(prefix + ".position", pointLight.position);
+            litShader_->SetVec3(prefix + ".color", pointLight.color);
+            litShader_->SetFloat(prefix + ".intensity", pointLight.intensity);
+            litShader_->SetFloat(prefix + ".range", pointLight.range);
+            litShader_->SetFloat(prefix + ".shadowStrength", pointLight.castsShadow ? 0.50f : 0.0f);
+            glActiveTexture(GL_TEXTURE0 + kPointShadowTextureUnitOffset + index);
+            glBindTexture(GL_TEXTURE_CUBE_MAP, pointLight.shadowCubeMap);
         }
-        if (traceRenderCall)
+        else
         {
-            DebugLog::Info("BaseScene", "Render call ", renderCallCount, " boundary walls done");
-        }
-    }
-
-    for (const SceneEntity& entity : entities_)
-    {
-        if (entity.placement.model == nullptr)
-        {
-            continue;
-        }
-
-        litShader_->SetBool("useTexture", entity.placement.model->HasTextures());
-        litShader_->SetFloat("specularStrength", SpecularStrengthForEntity(entity.name));
-        litShader_->SetVec3("baseColor", glm::vec3(0.92f, 0.86f, 0.72f));
-        litShader_->SetMat4("model", BuildStaticModelMatrix(entity));
-        entity.placement.model->Draw();
-        if (traceRenderCall)
-        {
-            DebugLog::Info("BaseScene", "Render call ", renderCallCount, " entity drawn ", entity.name);
+            litShader_->SetVec3(prefix + ".position", glm::vec3(0.0f));
+            litShader_->SetVec3(prefix + ".color", glm::vec3(0.0f));
+            litShader_->SetFloat(prefix + ".intensity", 0.0f);
+            litShader_->SetFloat(prefix + ".range", 1.0f);
+            litShader_->SetFloat(prefix + ".shadowStrength", 0.0f);
+            glActiveTexture(GL_TEXTURE0 + kPointShadowTextureUnitOffset + index);
+            glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
         }
     }
 
-    for (const InteractiveDoor& door : doors_)
+    DrawLitGeometry();
+    for (int index = 0; index < kMaxPointLights; ++index)
     {
-        if (door.placement.model == nullptr)
-        {
-            continue;
-        }
-
-        litShader_->SetBool("useTexture", door.placement.model->HasTextures());
-        litShader_->SetFloat("specularStrength", 0.04f);
-        litShader_->SetVec3("baseColor", glm::vec3(0.95f, 0.82f, 0.58f));
-        litShader_->SetMat4("model", BuildDoorModelMatrix(door));
-        door.placement.model->Draw();
-        if (traceRenderCall)
-        {
-            DebugLog::Info("BaseScene", "Render call ", renderCallCount, " door drawn ", door.name);
-        }
+        glActiveTexture(GL_TEXTURE0 + kPointShadowTextureUnitOffset + index);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
     }
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    const double litMs = MillisecondsSince(litBegin);
 
+    const auto markerBegin = std::chrono::steady_clock::now();
     lightMarkerShader_->Use();
     lightMarkerShader_->SetMat4("projection", projection);
     lightMarkerShader_->SetMat4("view", view);
-    lightMarkerShader_->SetVec3("color", glm::vec3(1.0f, 0.93f, 0.70f));
-    glm::mat4 lightMarkerModel = glm::translate(glm::mat4(1.0f), lightPosition_);
-    lightMarkerModel = glm::scale(lightMarkerModel, glm::vec3(0.18f));
-    lightMarkerShader_->SetMat4("model", lightMarkerModel);
-    lightMarkerMesh_->Draw();
+    lightMarkerShader_->SetVec3("color", glm::vec3(1.0f, 0.90f, 0.62f));
+    for (const PointLight& pointLight : pointLights_)
+    {
+        glm::mat4 lightMarkerModel = glm::translate(glm::mat4(1.0f), pointLight.position);
+        lightMarkerModel = glm::scale(lightMarkerModel, glm::vec3(0.12f));
+        lightMarkerShader_->SetMat4("model", lightMarkerModel);
+        lightMarkerMesh_->Draw();
+    }
     if (traceRenderCall)
     {
-        DebugLog::Info("BaseScene", "Render call ", renderCallCount, " light marker done");
+        DebugLog::Info("BaseScene", "Render call ", renderCallCount, " light markers done");
     }
+    const double markerMs = MillisecondsSince(markerBegin);
 
+    const auto debugBegin = std::chrono::steady_clock::now();
     if (physicsDebugEnabled_ && physicsDebugRenderer_ != nullptr)
     {
         physicsDebugRenderer_->Render(physicsDebugFrame_, view, projection);
@@ -423,6 +508,48 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
         {
             DebugLog::Info("BaseScene", "Render call ", renderCallCount, " physics debug done");
         }
+    }
+    const double debugMs = MillisecondsSince(debugBegin);
+
+    const double totalRenderMs = MillisecondsSince(renderBegin);
+    renderPerfStats_.frameCount += 1u;
+    renderPerfStats_.totalMs += totalRenderMs;
+    renderPerfStats_.shadowMs += shadowMs;
+    renderPerfStats_.skyboxMs += skyboxMs;
+    renderPerfStats_.litMs += litMs;
+    renderPerfStats_.markersMs += markerMs;
+    renderPerfStats_.debugMs += debugMs;
+    renderPerfStats_.maxFrameMs = std::max(renderPerfStats_.maxFrameMs, totalRenderMs);
+
+    if ((renderCallCount % 120u) == 0u || totalRenderMs > 18.0)
+    {
+        std::string activeLightLabels;
+        for (int index = 0; index < pointLightCount; ++index)
+        {
+            if (!activeLightLabels.empty())
+            {
+                activeLightLabels += ", ";
+            }
+            activeLightLabels += pointLights_[static_cast<std::size_t>(index)].label;
+        }
+
+        const double frameCount = std::max<double>(1.0, static_cast<double>(renderPerfStats_.frameCount));
+        DebugLog::Info(
+            "Perf",
+            "Render avgMs=", renderPerfStats_.totalMs / frameCount,
+            " maxMs=", renderPerfStats_.maxFrameMs,
+            " shadowAvgMs=", renderPerfStats_.shadowMs / frameCount,
+            " skyboxAvgMs=", renderPerfStats_.skyboxMs / frameCount,
+            " litAvgMs=", renderPerfStats_.litMs / frameCount,
+            " markerAvgMs=", renderPerfStats_.markersMs / frameCount,
+            " debugAvgMs=", renderPerfStats_.debugMs / frameCount,
+            " currentMs=", totalRenderMs,
+            " shadowUpdated=", shadowUpdated,
+            " pointLights=", pointLightCount,
+            " active=[", activeLightLabels, "]",
+            " camera=(", cameraPosition.x, ", ", cameraPosition.y, ", ", cameraPosition.z, ")");
+
+        renderPerfStats_ = RenderPerfStats {};
     }
 
     if (traceRenderCall)
@@ -590,6 +717,92 @@ void BaseScene::LoadEntities()
     LoadExteriorDecorations();
 }
 
+void BaseScene::ConfigureSceneLights()
+{
+    ReleasePointLightShadowMaps();
+    pointLights_.clear();
+
+    for (const SceneEntity& entity : entities_)
+    {
+        const std::string lowerName = ToLowerAscii(entity.name);
+        if (lowerName.find("street-light") == std::string::npos)
+        {
+            continue;
+        }
+
+        PointLight pointLight;
+        pointLight.label = lowerName;
+        pointLight.position = ComputeStreetLightAnchor(entity);
+        pointLight.color = glm::vec3(1.0f, 0.88f, 0.64f);
+        pointLight.intensity = 7.8f;
+        pointLight.range = 10.8f;
+        pointLight.castsShadow = true;
+        pointLights_.push_back(pointLight);
+    }
+
+    auto houseIterator = std::find_if(
+        entities_.begin(),
+        entities_.end(),
+        [](const SceneEntity& entity)
+        {
+            return ToLowerAscii(entity.name).find("house/source/example16_var1.fbx") != std::string::npos;
+        });
+    if (houseIterator != entities_.end() && houseIterator->placement.model != nullptr)
+    {
+        const glm::vec3 localMin = houseIterator->placement.model->GetMinBounds();
+        const glm::vec3 localMax = houseIterator->placement.model->GetMaxBounds();
+        const glm::vec3 localSize = localMax - localMin;
+        const glm::mat4 houseTransform = BuildStaticModelMatrix(*houseIterator);
+
+        auto addHousePointLight = [&](const std::string& label, const glm::vec3& localPosition, const glm::vec3& color, float intensity, float range)
+        {
+            PointLight pointLight;
+            pointLight.label = label;
+            pointLight.position = glm::vec3(houseTransform * glm::vec4(localPosition, 1.0f));
+            pointLight.color = color;
+            pointLight.intensity = intensity;
+            pointLight.range = range;
+            pointLights_.push_back(pointLight);
+        };
+
+        const auto lerpLocal = [&](float xFactor, float yFactor, float zFactor)
+        {
+            return glm::vec3(
+                glm::mix(localMin.x, localMax.x, xFactor),
+                glm::mix(localMin.y, localMax.y, yFactor),
+                glm::mix(localMin.z, localMax.z, zFactor));
+        };
+
+        addHousePointLight("house-lamp-entry", lerpLocal(0.34f, 0.69f, 0.30f), glm::vec3(1.0f, 0.82f, 0.64f), 2.2f, 5.6f);
+        addHousePointLight("house-lamp-hall", lerpLocal(0.53f, 0.71f, 0.46f), glm::vec3(1.0f, 0.84f, 0.68f), 2.1f, 5.2f);
+        addHousePointLight("house-lamp-living", lerpLocal(0.68f, 0.70f, 0.70f), glm::vec3(1.0f, 0.83f, 0.66f), 2.4f, 5.8f);
+        addHousePointLight("house-lamp-kitchen", lerpLocal(0.30f, 0.70f, 0.74f), glm::vec3(0.98f, 0.80f, 0.62f), 2.0f, 5.2f);
+    }
+
+    const std::size_t shadowCastingPointLights = static_cast<std::size_t>(std::count_if(
+        pointLights_.begin(),
+        pointLights_.end(),
+        [](const PointLight& light)
+        {
+            return light.castsShadow;
+        }));
+    DebugLog::Info(
+        "BaseScene",
+        "Lighting configured sunDirection=(",
+        sunDirection_.x, ", ", sunDirection_.y, ", ", sunDirection_.z,
+        ") sunColor=(",
+        sunColor_.x, ", ", sunColor_.y, ", ", sunColor_.z,
+        ") skyAmbient=(",
+        ambientSkyColor_.x, ", ", ambientSkyColor_.y, ", ", ambientSkyColor_.z,
+        ") groundAmbient=(",
+        ambientGroundColor_.x, ", ", ambientGroundColor_.y, ", ", ambientGroundColor_.z,
+        ") pointLights=", pointLights_.size(),
+        " shadowPointLights=", shadowCastingPointLights,
+        " pointShadowResolution=", pointShadowResolution_);
+    AllocatePointLightShadowMaps();
+    pointShadowMapsDirty_ = true;
+}
+
 void BaseScene::LoadHouseDemo()
 {
     DebugLog::ScopedTrace trace("BaseScene", "LoadHouseDemo");
@@ -681,10 +894,16 @@ void BaseScene::LoadExteriorDecorations()
 
     for (const DecorationDesc& decoration : decorations)
     {
+        glm::vec3 position = decoration.position;
+        if (ToLowerAscii(decoration.name).find("bush") != std::string::npos)
+        {
+            position.y -= 0.20f;
+        }
+
         AddStaticSceneEntity(
             decoration.name,
             decoration.path,
-            decoration.position,
+            position,
             decoration.yawDegrees,
             decoration.targetSize,
             0.0f,
@@ -926,6 +1145,299 @@ WalkableBlocker BaseScene::BuildDoorBlocker(const InteractiveDoor& door) const
     return blocker;
 }
 
+glm::mat4 BaseScene::BuildSunLightSpaceMatrix() const
+{
+    const glm::vec3 sceneCenter(
+        (sceneBoundsMin_.x + sceneBoundsMax_.x) * 0.5f,
+        5.0f,
+        (sceneBoundsMin_.z + sceneBoundsMax_.z) * 0.5f);
+    const glm::vec3 sunDirection = glm::normalize(sunDirection_);
+    const glm::vec3 lightPosition = sceneCenter - (sunDirection * 36.0f);
+    const glm::mat4 lightView = glm::lookAt(lightPosition, sceneCenter, glm::vec3(0.0f, 1.0f, 0.0f));
+
+    std::array<glm::vec3, 8> sceneCorners {
+        glm::vec3(sceneBoundsMin_.x, 0.0f, sceneBoundsMin_.z),
+        glm::vec3(sceneBoundsMax_.x, 0.0f, sceneBoundsMin_.z),
+        glm::vec3(sceneBoundsMin_.x, 0.0f, sceneBoundsMax_.z),
+        glm::vec3(sceneBoundsMax_.x, 0.0f, sceneBoundsMax_.z),
+        glm::vec3(sceneBoundsMin_.x, sceneBoundsMax_.y, sceneBoundsMin_.z),
+        glm::vec3(sceneBoundsMax_.x, sceneBoundsMax_.y, sceneBoundsMin_.z),
+        glm::vec3(sceneBoundsMin_.x, sceneBoundsMax_.y, sceneBoundsMax_.z),
+        glm::vec3(sceneBoundsMax_.x, sceneBoundsMax_.y, sceneBoundsMax_.z)
+    };
+
+    glm::vec3 lightSpaceMin(std::numeric_limits<float>::max());
+    glm::vec3 lightSpaceMax(std::numeric_limits<float>::lowest());
+    for (const glm::vec3& corner : sceneCorners)
+    {
+        const glm::vec3 lightSpacePoint = glm::vec3(lightView * glm::vec4(corner, 1.0f));
+        lightSpaceMin = glm::min(lightSpaceMin, lightSpacePoint);
+        lightSpaceMax = glm::max(lightSpaceMax, lightSpacePoint);
+    }
+
+    constexpr float kShadowPadding = 4.0f;
+    lightSpaceMin -= glm::vec3(kShadowPadding);
+    lightSpaceMax += glm::vec3(kShadowPadding);
+    const glm::mat4 lightProjection = glm::ortho(
+        lightSpaceMin.x,
+        lightSpaceMax.x,
+        lightSpaceMin.y,
+        lightSpaceMax.y,
+        -lightSpaceMax.z - kShadowPadding,
+        -lightSpaceMin.z + kShadowPadding);
+    return lightProjection * lightView;
+}
+
+glm::vec3 BaseScene::ComputeStreetLightAnchor(const SceneEntity& entity) const
+{
+    if (entity.placement.model == nullptr)
+    {
+        return entity.worldPosition + glm::vec3(0.0f, 4.0f, 0.0f);
+    }
+
+    const glm::vec3 localMin = entity.placement.model->GetMinBounds();
+    const glm::vec3 localMax = entity.placement.model->GetMaxBounds();
+    const glm::vec3 localCenter = (localMin + localMax) * 0.5f;
+    const glm::vec3 localSize = localMax - localMin;
+    glm::vec3 localLampPoint(localCenter.x, glm::mix(localMin.y, localMax.y, 0.88f), localCenter.z);
+    localLampPoint += glm::vec3(0.0f, 5.0f - (localSize.y * 0.04f), localSize.z * 0.325f);
+    const glm::vec3 worldLampPoint = glm::vec3(BuildStaticModelMatrix(entity) * glm::vec4(localLampPoint, 1.0f));
+    return worldLampPoint;
+}
+
+void BaseScene::RenderPointShadowMaps() const
+{
+    if (pointShadowFramebuffer_ == 0 || pointShadowDepthShader_ == nullptr || pointLights_.empty())
+    {
+        return;
+    }
+
+    GLint previousViewport[4] { 0, 0, 0, 0 };
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+
+    glViewport(0, 0, pointShadowResolution_, pointShadowResolution_);
+    glBindFramebuffer(GL_FRAMEBUFFER, pointShadowFramebuffer_);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(2.0f, 4.0f);
+
+    pointShadowDepthShader_->Use();
+    constexpr float kNearPlane = 0.08f;
+
+    const std::size_t shadowLightCount = std::min(pointLights_.size(), static_cast<std::size_t>(kMaxPointLights));
+    for (std::size_t lightIndex = 0; lightIndex < shadowLightCount; ++lightIndex)
+    {
+        const PointLight& pointLight = pointLights_[lightIndex];
+        if (!pointLight.castsShadow || pointLight.shadowCubeMap == 0)
+        {
+            continue;
+        }
+
+        const float farPlane = std::max(pointLight.range, 0.5f);
+        const glm::mat4 projection = glm::perspective(glm::radians(90.0f), 1.0f, kNearPlane, farPlane);
+        const std::array<glm::mat4, 6> shadowTransforms {
+            projection * glm::lookAt(pointLight.position, pointLight.position + glm::vec3( 1.0f,  0.0f,  0.0f), glm::vec3(0.0f, -1.0f,  0.0f)),
+            projection * glm::lookAt(pointLight.position, pointLight.position + glm::vec3(-1.0f,  0.0f,  0.0f), glm::vec3(0.0f, -1.0f,  0.0f)),
+            projection * glm::lookAt(pointLight.position, pointLight.position + glm::vec3( 0.0f,  1.0f,  0.0f), glm::vec3(0.0f,  0.0f,  1.0f)),
+            projection * glm::lookAt(pointLight.position, pointLight.position + glm::vec3( 0.0f, -1.0f,  0.0f), glm::vec3(0.0f,  0.0f, -1.0f)),
+            projection * glm::lookAt(pointLight.position, pointLight.position + glm::vec3( 0.0f,  0.0f,  1.0f), glm::vec3(0.0f, -1.0f,  0.0f)),
+            projection * glm::lookAt(pointLight.position, pointLight.position + glm::vec3( 0.0f,  0.0f, -1.0f), glm::vec3(0.0f, -1.0f,  0.0f))
+        };
+
+        pointShadowDepthShader_->SetVec3("lightPosition", pointLight.position);
+        pointShadowDepthShader_->SetFloat("farPlane", farPlane);
+        for (int face = 0; face < 6; ++face)
+        {
+            glFramebufferTexture2D(
+                GL_FRAMEBUFFER,
+                GL_DEPTH_ATTACHMENT,
+                GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
+                pointLight.shadowCubeMap,
+                0);
+            glClear(GL_DEPTH_BUFFER_BIT);
+            pointShadowDepthShader_->SetMat4("shadowMatrix", shadowTransforms[static_cast<std::size_t>(face)]);
+            DrawShadowCasters(*pointShadowDepthShader_);
+        }
+    }
+
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+}
+
+void BaseScene::AllocatePointLightShadowMaps()
+{
+    const std::size_t shadowLightCount = std::min(pointLights_.size(), static_cast<std::size_t>(kMaxPointLights));
+    std::size_t allocatedCount = 0;
+    for (std::size_t index = 0; index < shadowLightCount; ++index)
+    {
+        PointLight& pointLight = pointLights_[index];
+        if (!pointLight.castsShadow)
+        {
+            continue;
+        }
+
+        glGenTextures(1, &pointLight.shadowCubeMap);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, pointLight.shadowCubeMap);
+        for (int face = 0; face < 6; ++face)
+        {
+            glTexImage2D(
+                GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
+                0,
+                GL_DEPTH_COMPONENT,
+                pointShadowResolution_,
+                pointShadowResolution_,
+                0,
+                GL_DEPTH_COMPONENT,
+                GL_FLOAT,
+                nullptr);
+        }
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        allocatedCount += 1u;
+    }
+    glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+    DebugLog::Info(
+        "BaseScene",
+        "Point shadow cube maps allocated=", allocatedCount,
+        " resolution=", pointShadowResolution_,
+        " textureUnitOffset=", kPointShadowTextureUnitOffset);
+}
+
+void BaseScene::ReleasePointLightShadowMaps()
+{
+    for (PointLight& pointLight : pointLights_)
+    {
+        if (pointLight.shadowCubeMap != 0)
+        {
+            glDeleteTextures(1, &pointLight.shadowCubeMap);
+            pointLight.shadowCubeMap = 0;
+        }
+    }
+}
+
+void BaseScene::RenderShadowMap(const glm::mat4& lightSpaceMatrix) const
+{
+    if (shadowMapFramebuffer_ == 0 || shadowMapTexture_ == 0 || shadowDepthShader_ == nullptr)
+    {
+        return;
+    }
+
+    GLint previousViewport[4] { 0, 0, 0, 0 };
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+
+    glViewport(0, 0, shadowMapResolution_, shadowMapResolution_);
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowMapFramebuffer_);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(2.0f, 4.0f);
+
+    shadowDepthShader_->Use();
+    shadowDepthShader_->SetMat4("lightSpaceMatrix", lightSpaceMatrix);
+    DrawShadowCasters(*shadowDepthShader_);
+
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+}
+
+void BaseScene::DrawShadowCasters(const ShaderProgram& shader) const
+{
+    for (const SceneEntity& entity : entities_)
+    {
+        if (entity.placement.model == nullptr)
+        {
+            continue;
+        }
+
+        shader.SetBool("useTexture", false);
+        shader.SetMat4("model", BuildStaticModelMatrix(entity));
+        entity.placement.model->DrawWithoutTextures();
+    }
+
+    for (const InteractiveDoor& door : doors_)
+    {
+        if (door.placement.model == nullptr)
+        {
+            continue;
+        }
+
+        shader.SetBool("useTexture", false);
+        shader.SetMat4("model", BuildDoorModelMatrix(door));
+        door.placement.model->DrawWithoutTextures();
+    }
+}
+
+void BaseScene::DrawLitGeometry() const
+{
+    litShader_->SetBool("useTexture", true);
+    litShader_->SetFloat("specularStrength", 0.0f);
+    litShader_->SetFloat("unlitFactor", 0.0f);
+    litShader_->SetVec3("baseColor", glm::vec3(1.0f));
+    litShader_->SetMat4("model", glm::mat4(1.0f));
+    floorMesh_->Draw();
+
+    if (boundarySideWallMesh_ != nullptr && boundaryEndWallMesh_ != nullptr)
+    {
+        litShader_->SetBool("useTexture", true);
+        litShader_->SetFloat("specularStrength", 0.0f);
+        litShader_->SetFloat("unlitFactor", 1.0f);
+        litShader_->SetVec3("baseColor", glm::vec3(1.0f));
+        const std::array<glm::vec3, 4> wallCenters = BuildBoundaryWallCenters(
+            sceneBoundsMin_,
+            sceneBoundsMax_,
+            boundaryWallHeight_,
+            boundaryWallThickness_);
+        for (std::size_t wallIndex = 0; wallIndex < wallCenters.size(); ++wallIndex)
+        {
+            litShader_->SetMat4("model", glm::translate(glm::mat4(1.0f), wallCenters[wallIndex]));
+            if (wallIndex < 2u)
+            {
+                boundarySideWallMesh_->Draw();
+            }
+            else
+            {
+                boundaryEndWallMesh_->Draw();
+            }
+        }
+        litShader_->SetFloat("unlitFactor", 0.0f);
+    }
+
+    for (const SceneEntity& entity : entities_)
+    {
+        if (entity.placement.model == nullptr)
+        {
+            continue;
+        }
+
+        litShader_->SetBool("useTexture", entity.placement.model->HasTextures());
+        litShader_->SetFloat("specularStrength", SpecularStrengthForEntity(entity.name));
+        litShader_->SetFloat("unlitFactor", 0.0f);
+        litShader_->SetVec3("baseColor", glm::vec3(0.92f, 0.86f, 0.72f));
+        litShader_->SetMat4("model", BuildStaticModelMatrix(entity));
+        entity.placement.model->Draw();
+    }
+
+    for (const InteractiveDoor& door : doors_)
+    {
+        if (door.placement.model == nullptr)
+        {
+            continue;
+        }
+
+        litShader_->SetBool("useTexture", door.placement.model->HasTextures());
+        litShader_->SetFloat("specularStrength", 0.03f);
+        litShader_->SetFloat("unlitFactor", 0.0f);
+        litShader_->SetVec3("baseColor", glm::vec3(0.95f, 0.82f, 0.58f));
+        litShader_->SetMat4("model", BuildDoorModelMatrix(door));
+        door.placement.model->Draw();
+    }
+}
+
 Mesh BaseScene::CreateFloorMesh(GLuint textureId, const glm::vec2& halfExtents, const glm::vec2& uvTiling)
 {
     std::vector<Vertex> vertices = MakeVertices({
@@ -1012,6 +1524,44 @@ Mesh BaseScene::CreateTexturedBoxMesh(
     return Mesh(std::move(vertices), std::move(indices), std::move(textures));
 }
 
+Mesh BaseScene::CreateTexturedWallPlaneMesh(
+    GLuint textureId,
+    const std::string& textureName,
+    const glm::vec2& size,
+    float tileWorldSize,
+    bool horizontalAxisIsX)
+{
+    const float halfHorizontal = size.x * 0.5f;
+    const float halfHeight = size.y * 0.5f;
+    const float uRepeat = std::max(size.x / std::max(tileWorldSize, 0.001f), 1.0f);
+    const float vRepeat = std::max(size.y / std::max(tileWorldSize, 0.001f), 1.0f);
+    const glm::vec3 normal = horizontalAxisIsX
+        ? glm::vec3(0.0f, 0.0f, 1.0f)
+        : glm::vec3(1.0f, 0.0f, 0.0f);
+
+    auto makePosition = [&](float horizontal, float vertical)
+    {
+        return horizontalAxisIsX
+            ? glm::vec3(horizontal, vertical, 0.0f)
+            : glm::vec3(0.0f, vertical, horizontal);
+    };
+
+    std::vector<Vertex> vertices {
+        Vertex { makePosition(-halfHorizontal, -halfHeight), normal, glm::vec2(uRepeat, vRepeat) },
+        Vertex { makePosition( halfHorizontal, -halfHeight), normal, glm::vec2(0.0f, vRepeat) },
+        Vertex { makePosition( halfHorizontal,  halfHeight), normal, glm::vec2(0.0f, 0.0f) },
+        Vertex { makePosition(-halfHorizontal,  halfHeight), normal, glm::vec2(uRepeat, 0.0f) }
+    };
+    std::vector<unsigned int> indices {
+        0u, 1u, 2u,
+        0u, 2u, 3u
+    };
+    std::vector<Texture> textures {
+        Texture { textureId, "texture_diffuse", textureName }
+    };
+    return Mesh(std::move(vertices), std::move(indices), std::move(textures));
+}
+
 Mesh BaseScene::CreateCubeMesh(GLuint textureId, const std::string& textureName)
 {
     std::vector<Vertex> vertices = MakeVertices({
@@ -1071,4 +1621,62 @@ Mesh BaseScene::CreateCubeMesh(GLuint textureId, const std::string& textureName)
     }
 
     return Mesh(std::move(vertices), std::move(indices), std::move(textures));
+}
+
+Mesh BaseScene::CreateSphereMesh(int latitudeSegments, int longitudeSegments)
+{
+    const int latSegments = std::max(latitudeSegments, 3);
+    const int lonSegments = std::max(longitudeSegments, 4);
+
+    std::vector<Vertex> vertices;
+    std::vector<unsigned int> indices;
+    vertices.reserve(static_cast<std::size_t>((latSegments + 1) * (lonSegments + 1)));
+    indices.reserve(static_cast<std::size_t>(latSegments * lonSegments * 6));
+
+    for (int lat = 0; lat <= latSegments; ++lat)
+    {
+        const float v = static_cast<float>(lat) / static_cast<float>(latSegments);
+        const float phi = v * glm::pi<float>();
+        const float y = std::cos(phi);
+        const float radius = std::sin(phi);
+
+        for (int lon = 0; lon <= lonSegments; ++lon)
+        {
+            const float u = static_cast<float>(lon) / static_cast<float>(lonSegments);
+            const float theta = u * glm::two_pi<float>();
+            const glm::vec3 normal(
+                radius * std::cos(theta),
+                y,
+                radius * std::sin(theta));
+
+            Vertex vertex {};
+            vertex.position = normal * 0.5f;
+            vertex.normal = glm::normalize(normal);
+            vertex.texCoords = glm::vec2(u, v);
+            vertices.push_back(vertex);
+        }
+    }
+
+    const int stride = lonSegments + 1;
+    for (int lat = 0; lat < latSegments; ++lat)
+    {
+        for (int lon = 0; lon < lonSegments; ++lon)
+        {
+            const unsigned int topLeft = static_cast<unsigned int>((lat * stride) + lon);
+            const unsigned int bottomLeft = topLeft + static_cast<unsigned int>(stride);
+            const unsigned int topRight = topLeft + 1u;
+            const unsigned int bottomRight = bottomLeft + 1u;
+
+            if (lat > 0)
+            {
+                indices.insert(indices.end(), { topLeft, bottomLeft, topRight });
+            }
+            if (lat < latSegments - 1)
+            {
+                indices.insert(indices.end(), { topRight, bottomLeft, bottomRight });
+            }
+        }
+    }
+
+    return Mesh(std::move(vertices), std::move(indices), {});
 }
