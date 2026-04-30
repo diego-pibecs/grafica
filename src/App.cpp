@@ -18,6 +18,7 @@
 #include "DebugLog.h"
 #include "import/ImportedGeometry.h"
 #include "navigation/RecastNavigationWorld.h"
+#include "render/debug/DebugOverlayRenderer.h"
 
 #ifndef APP_ASSET_DIR
 #define APP_ASSET_DIR "assets"
@@ -300,6 +301,7 @@ bool App::Init()
         const auto sceneInitBegin = std::chrono::steady_clock::now();
         DebugLog::Info("App", "Constructing BaseScene");
         scene_ = std::make_unique<BaseScene>(assetsRoot_);
+        debugOverlayRenderer_ = std::make_unique<DebugOverlayRenderer>(assetsRoot_);
         DebugLog::Info("App", "Initializing BaseScene");
         scene_->Init();
         const auto sceneInitEnd = std::chrono::steady_clock::now();
@@ -391,6 +393,7 @@ void App::Shutdown()
     DebugLog::ScopedTrace trace("App", "Shutdown");
     pendingNavigationBuild_.reset();
     walkableWorld_.reset();
+    debugOverlayRenderer_.reset();
     scene_.reset();
 
     if (window_ != nullptr)
@@ -536,6 +539,29 @@ void App::Render()
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     scene_->Render(camera_, projection);
+    if (physicsDebugEnabled_ && debugOverlayRenderer_ != nullptr)
+    {
+        const PlayerSnapshot& playerSnapshot = player_.GetSnapshot();
+        const glm::vec3 cameraPosition = camera_.GetPosition();
+        const char* cameraMode = camera_.GetMode() == CameraMode::Fps ? "FPS" : "ORBIT";
+        const char* movementMode = "NAVMESH";
+
+        auto formatVec3 = [](const char* label, const glm::vec3& value)
+        {
+            std::ostringstream stream;
+            stream << label
+                   << " X " << std::fixed << std::setprecision(2) << value.x
+                   << " Y " << value.y
+                   << " Z " << value.z;
+            return stream.str();
+        };
+
+        std::vector<std::string> debugLines;
+        debugLines.push_back(formatVec3("XYZ", playerSnapshot.position));
+        debugLines.push_back(formatVec3("CAM", cameraPosition));
+        debugLines.push_back(std::string("MODE ") + movementMode + " / " + cameraMode);
+        debugOverlayRenderer_->Render(debugLines, framebufferWidth_, framebufferHeight_);
+    }
     if (traceCurrentFrame_)
     {
         DebugLog::Info("Render", "End render");

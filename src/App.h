@@ -14,6 +14,7 @@
 #include "navigation/IWalkableWorld.h"
 
 struct GLFWwindow;
+class DebugOverlayRenderer;
 
 class App
 {
@@ -34,6 +35,7 @@ private:
     InputState input_;
     CameraController camera_;
     std::unique_ptr<BaseScene> scene_;
+    std::unique_ptr<DebugOverlayRenderer> debugOverlayRenderer_;
     std::unique_ptr<IWalkableWorld> walkableWorld_;
     int framebufferWidth_ = 1280;
     int framebufferHeight_ = 720;

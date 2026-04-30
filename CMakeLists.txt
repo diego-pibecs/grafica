@@ -116,6 +116,7 @@ add_executable(grafica_bbb_base
   src/physics/assets/CollisionAsset.cpp
   src/physics/core/ReactPhysicsWorld.cpp
   src/physics/controller/CharacterController.cpp
+  src/render/debug/DebugOverlayRenderer.cpp
   src/render/debug/PhysicsDebugRenderer.cpp
 )
 
