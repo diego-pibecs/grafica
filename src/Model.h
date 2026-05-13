@@ -22,6 +22,15 @@ public:
         glm::vec3 max { 0.0f };
     };
 
+    struct NodeMarker
+    {
+        std::string name;
+        std::string path;
+        glm::mat4 transform { 1.0f };
+        glm::vec3 position { 0.0f };
+        bool hasMesh = false;
+    };
+
     explicit Model(const std::filesystem::path& path, bool loadTextures = true);
 
     void Draw() const;
@@ -34,10 +43,12 @@ public:
     [[nodiscard]] glm::vec3 GetCenter() const noexcept;
     [[nodiscard]] glm::vec3 GetSize() const noexcept;
     [[nodiscard]] const std::vector<NamedBounds>& GetNamedBounds() const noexcept;
+    [[nodiscard]] const std::vector<NodeMarker>& GetNodeMarkers() const noexcept;
 
 private:
     std::vector<Mesh> meshes_;
     std::vector<NamedBounds> namedBounds_;
+    std::vector<NodeMarker> nodeMarkers_;
     std::vector<Texture> texturesLoaded_;
     std::filesystem::path directory_;
     std::string sourceFilename_;
@@ -66,7 +77,11 @@ private:
     std::unordered_set<std::array<long long, 9>, QuantizedTriangleKeyHash> triangleKeys_;
 
     void LoadModel(const std::filesystem::path& path);
-    void ProcessNode(struct aiNode* node, const struct aiScene* scene, const glm::mat4& parentTransform);
+    void ProcessNode(
+        struct aiNode* node,
+        const struct aiScene* scene,
+        const glm::mat4& parentTransform,
+        const std::string& parentPath);
     Mesh ProcessMesh(struct aiMesh* mesh, const struct aiScene* scene, const glm::mat4& nodeTransform);
     std::vector<Texture> LoadMaterialTextures(
         struct aiMaterial* material,

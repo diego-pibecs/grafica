@@ -44,22 +44,22 @@ void PlayerController::Update(const InputState& input, float movementYawDegrees)
     const glm::vec3 right = glm::normalize(glm::cross(forward, kWorldUp));
 
     glm::vec3 movementDirection(0.0f);
-    if (input.IsKeyDown(GLFW_KEY_W) || input.IsKeyDown(GLFW_KEY_UP))
+    if (input.IsKeyDown(GLFW_KEY_W))
     {
         movementDirection += forward;
     }
 
-    if (input.IsKeyDown(GLFW_KEY_S) || input.IsKeyDown(GLFW_KEY_DOWN))
+    if (input.IsKeyDown(GLFW_KEY_S))
     {
         movementDirection -= forward;
     }
 
-    if (input.IsKeyDown(GLFW_KEY_D) || input.IsKeyDown(GLFW_KEY_RIGHT))
+    if (input.IsKeyDown(GLFW_KEY_D))
     {
         movementDirection += right;
     }
 
-    if (input.IsKeyDown(GLFW_KEY_A) || input.IsKeyDown(GLFW_KEY_LEFT))
+    if (input.IsKeyDown(GLFW_KEY_A))
     {
         movementDirection -= right;
     }
@@ -75,6 +75,7 @@ void PlayerController::Update(const InputState& input, float movementYawDegrees)
     request.wishMoveScale = glm::length(movementDirection) > 0.0f ? 1.0f : 0.0f;
     request.sprintRequested = sprinting;
     request.jumpRequested = input.WasKeyPressed(GLFW_KEY_SPACE);
+    request.ledgeFallAllowed = snapshot_.position.x > 48.0f;
     request.dt = input.deltaTime;
     characterController_.Update(request);
 

@@ -16,7 +16,7 @@ struct CharacterParams
     float sprintMultiplier = 1.75f;
     float acceleration = 18.0f;
     float airControl = 0.35f;
-    float jumpSpeed = 4.6f;
+    float jumpSpeed = 5.8f;
     float gravity = 16.5f;
     float dynamicBlockerPushSpeed = 2.4f;
     float eyeHeight = 1.45f;
@@ -37,6 +37,7 @@ struct CharacterMoveRequest
     float wishMoveScale = 1.0f;
     bool sprintRequested = false;
     bool jumpRequested = false;
+    bool ledgeFallAllowed = false;
     float dt = 0.0f;
 };
 

@@ -35,13 +35,13 @@ void CameraController::ToggleMode()
 {
     if (mode_ == CameraMode::Fps)
     {
-        orbitYaw_ = fpsYaw_ + 180.0f;
-        orbitPitch_ = std::clamp(18.0f - (fpsPitch_ * 0.15f), 8.0f, 45.0f);
-        mode_ = CameraMode::Orbit;
+        thirdPersonYaw_ = fpsYaw_ + 180.0f;
+        thirdPersonPitch_ = std::clamp(18.0f - (fpsPitch_ * 0.15f), 8.0f, 45.0f);
+        mode_ = CameraMode::ThirdPerson;
         return;
     }
 
-    fpsYaw_ = orbitYaw_ + 180.0f;
+    fpsYaw_ = thirdPersonYaw_ + 180.0f;
     mode_ = CameraMode::Fps;
 }
 
@@ -53,7 +53,7 @@ void CameraController::Update(const InputState& input)
     }
     else
     {
-        UpdateOrbit(input);
+        UpdateThirdPerson(input);
     }
 }
 
@@ -71,7 +71,7 @@ glm::mat4 CameraController::GetViewMatrix() const
 
 glm::vec3 CameraController::GetPosition() const
 {
-    return mode_ == CameraMode::Fps ? playerAnchor_ : GetOrbitPosition();
+    return mode_ == CameraMode::Fps ? playerAnchor_ : GetThirdPersonPosition();
 }
 
 glm::vec3 CameraController::GetForward() const
@@ -81,7 +81,7 @@ glm::vec3 CameraController::GetForward() const
         return GetFpsFront();
     }
 
-    return glm::normalize(orbitTarget_ - GetOrbitPosition());
+    return glm::normalize(orbitTarget_ - GetThirdPersonPosition());
 }
 
 float CameraController::GetFovDegrees() const noexcept
@@ -91,7 +91,7 @@ float CameraController::GetFovDegrees() const noexcept
 
 float CameraController::GetMovementYawDegrees() const noexcept
 {
-    return mode_ == CameraMode::Fps ? fpsYaw_ : orbitYaw_ + 180.0f;
+    return mode_ == CameraMode::Fps ? fpsYaw_ : thirdPersonYaw_ + 180.0f;
 }
 
 void CameraController::UpdateFps(const InputState& input)
@@ -104,19 +104,19 @@ void CameraController::UpdateFps(const InputState& input)
 
     float yawInput = 0.0f;
     float pitchInput = 0.0f;
-    if (input.IsKeyDown(GLFW_KEY_J))
+    if (input.IsKeyDown(GLFW_KEY_LEFT))
     {
         yawInput -= 1.0f;
     }
-    if (input.IsKeyDown(GLFW_KEY_L))
+    if (input.IsKeyDown(GLFW_KEY_RIGHT))
     {
         yawInput += 1.0f;
     }
-    if (input.IsKeyDown(GLFW_KEY_I))
+    if (input.IsKeyDown(GLFW_KEY_UP))
     {
         pitchInput += 1.0f;
     }
-    if (input.IsKeyDown(GLFW_KEY_K))
+    if (input.IsKeyDown(GLFW_KEY_DOWN))
     {
         pitchInput -= 1.0f;
     }
@@ -127,37 +127,37 @@ void CameraController::UpdateFps(const InputState& input)
     ClampPitch(fpsPitch_);
 }
 
-void CameraController::UpdateOrbit(const InputState& input)
+void CameraController::UpdateThirdPerson(const InputState& input)
 {
     if (input.mouseCaptured)
     {
-        orbitYaw_ += static_cast<float>(input.mouseDeltaX) * mouseSensitivity_;
-        orbitPitch_ -= static_cast<float>(input.mouseDeltaY) * mouseSensitivity_;
+        thirdPersonYaw_ += static_cast<float>(input.mouseDeltaX) * mouseSensitivity_;
+        thirdPersonPitch_ -= static_cast<float>(input.mouseDeltaY) * mouseSensitivity_;
     }
 
     float yawInput = 0.0f;
     float pitchInput = 0.0f;
-    if (input.IsKeyDown(GLFW_KEY_J))
+    if (input.IsKeyDown(GLFW_KEY_LEFT))
     {
         yawInput -= 1.0f;
     }
-    if (input.IsKeyDown(GLFW_KEY_L))
+    if (input.IsKeyDown(GLFW_KEY_RIGHT))
     {
         yawInput += 1.0f;
     }
-    if (input.IsKeyDown(GLFW_KEY_I))
+    if (input.IsKeyDown(GLFW_KEY_UP))
     {
         pitchInput += 1.0f;
     }
-    if (input.IsKeyDown(GLFW_KEY_K))
+    if (input.IsKeyDown(GLFW_KEY_DOWN))
     {
         pitchInput -= 1.0f;
     }
 
     const float lookDelta = keyboardLookSpeedDegrees_ * std::max(input.deltaTime, 1.0f / 60.0f);
-    orbitYaw_ += yawInput * lookDelta;
-    orbitPitch_ += pitchInput * lookDelta;
-    ClampPitch(orbitPitch_);
+    thirdPersonYaw_ += yawInput * lookDelta;
+    thirdPersonPitch_ += pitchInput * lookDelta;
+    ClampPitch(thirdPersonPitch_);
 
     float keyboardZoomDirection = 0.0f;
     if (input.IsKeyDown(GLFW_KEY_EQUAL) || input.IsKeyDown(GLFW_KEY_KP_ADD))
@@ -170,11 +170,11 @@ void CameraController::UpdateOrbit(const InputState& input)
     }
 
     const float keyboardZoomAmount =
-        keyboardZoomDirection * orbitZoomSpeed_ * std::max(input.deltaTime, 1.0f / 60.0f) * 6.0f;
+        keyboardZoomDirection * thirdPersonZoomSpeed_ * std::max(input.deltaTime, 1.0f / 60.0f) * 6.0f;
 
-    orbitRadius_ -= static_cast<float>(input.scrollDeltaY) * orbitZoomSpeed_;
-    orbitRadius_ -= keyboardZoomAmount;
-    orbitRadius_ = std::clamp(orbitRadius_, 2.5f, 20.0f);
+    thirdPersonRadius_ -= static_cast<float>(input.scrollDeltaY) * thirdPersonZoomSpeed_;
+    thirdPersonRadius_ -= keyboardZoomAmount;
+    thirdPersonRadius_ = std::clamp(thirdPersonRadius_, 2.5f, 20.0f);
 }
 
 void CameraController::ClampPitch(float& pitch) const
@@ -191,15 +191,15 @@ glm::vec3 CameraController::GetFpsFront() const
     return glm::normalize(front);
 }
 
-glm::vec3 CameraController::GetOrbitPosition() const
+glm::vec3 CameraController::GetThirdPersonPosition() const
 {
-    const float yawRadians = glm::radians(orbitYaw_);
-    const float pitchRadians = glm::radians(orbitPitch_);
-    const float horizontalRadius = orbitRadius_ * std::cos(pitchRadians);
+    const float yawRadians = glm::radians(thirdPersonYaw_);
+    const float pitchRadians = glm::radians(thirdPersonPitch_);
+    const float horizontalRadius = thirdPersonRadius_ * std::cos(pitchRadians);
 
     glm::vec3 position = orbitTarget_ + glm::vec3(
         horizontalRadius * std::cos(yawRadians),
-        orbitRadius_ * std::sin(pitchRadians),
+        thirdPersonRadius_ * std::sin(pitchRadians),
         horizontalRadius * std::sin(yawRadians));
 
     if (hasOrbitBounds_)

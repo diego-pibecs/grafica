@@ -276,12 +276,18 @@ const std::vector<Model::NamedBounds>& Model::GetNamedBounds() const noexcept
     return namedBounds_;
 }
 
+const std::vector<Model::NodeMarker>& Model::GetNodeMarkers() const noexcept
+{
+    return nodeMarkers_;
+}
+
 void Model::LoadModel(const std::filesystem::path& path)
 {
     DebugLog::ScopedTrace trace("Model", path.string());
     minBounds_ = glm::vec3(std::numeric_limits<float>::max());
     maxBounds_ = glm::vec3(std::numeric_limits<float>::lowest());
     namedBounds_.clear();
+    nodeMarkers_.clear();
     triangleKeys_.clear();
     sourceTriangleCount_ = 0;
     removedDuplicateTriangleCount_ = 0;
@@ -314,13 +320,14 @@ void Model::LoadModel(const std::filesystem::path& path)
         " meshes=", scene->mNumMeshes,
         " materials=", scene->mNumMaterials,
         " textures=", scene->mNumTextures);
-    ProcessNode(scene->mRootNode, scene, glm::mat4(1.0f));
+    ProcessNode(scene->mRootNode, scene, glm::mat4(1.0f), "");
     isLoaded_ = !meshes_.empty();
     DebugLog::Info(
         "Model",
         "Model load result path=", path.string(),
         " loaded=", isLoaded_,
         " meshCount=", meshes_.size(),
+        " nodeMarkers=", nodeMarkers_.size(),
         " namedBounds=", namedBounds_.size(),
         " sourceTriangles=", sourceTriangleCount_,
         " removedDuplicates=", removedDuplicateTriangleCount_,
@@ -328,9 +335,23 @@ void Model::LoadModel(const std::filesystem::path& path)
     triangleKeys_.clear();
 }
 
-void Model::ProcessNode(aiNode* node, const aiScene* scene, const glm::mat4& parentTransform)
+void Model::ProcessNode(
+    aiNode* node,
+    const aiScene* scene,
+    const glm::mat4& parentTransform,
+    const std::string& parentPath)
 {
     const glm::mat4 nodeTransform = parentTransform * AiToGlm(node->mTransformation);
+    const std::string nodeName = node->mName.length > 0 ? std::string(node->mName.C_Str()) : "node";
+    const std::string nodePath = parentPath.empty() ? nodeName : parentPath + "/" + nodeName;
+
+    nodeMarkers_.push_back(NodeMarker {
+        nodeName,
+        nodePath,
+        nodeTransform,
+        glm::vec3(nodeTransform * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)),
+        node->mNumMeshes > 0
+    });
 
     for (unsigned int meshIndex = 0; meshIndex < node->mNumMeshes; ++meshIndex)
     {
@@ -340,7 +361,7 @@ void Model::ProcessNode(aiNode* node, const aiScene* scene, const glm::mat4& par
 
     for (unsigned int childIndex = 0; childIndex < node->mNumChildren; ++childIndex)
     {
-        ProcessNode(node->mChildren[childIndex], scene, nodeTransform);
+        ProcessNode(node->mChildren[childIndex], scene, nodeTransform, nodePath);
     }
 }
 

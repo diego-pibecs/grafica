@@ -40,7 +40,6 @@ private:
     int framebufferWidth_ = 1280;
     int framebufferHeight_ = 720;
     bool physicsDebugEnabled_ = false;
-    bool performanceTitleEnabled_ = false;
     double displayedFps_ = 0.0;
     std::uint64_t frameIndex_ = 0;
     bool traceCurrentFrame_ = false;

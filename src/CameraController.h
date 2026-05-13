@@ -7,7 +7,7 @@
 enum class CameraMode
 {
     Fps,
-    Orbit
+    ThirdPerson
 };
 
 class CameraController
@@ -34,10 +34,10 @@ private:
     glm::vec3 orbitTarget_ { 0.0f, 1.0f, 0.0f };
     float fpsYaw_ = -90.0f;
     float fpsPitch_ = -10.0f;
-    float orbitYaw_ = 90.0f;
-    float orbitPitch_ = 18.0f;
-    float orbitRadius_ = 5.5f;
-    float orbitZoomSpeed_ = 1.2f;
+    float thirdPersonYaw_ = 90.0f;
+    float thirdPersonPitch_ = 18.0f;
+    float thirdPersonRadius_ = 5.5f;
+    float thirdPersonZoomSpeed_ = 1.2f;
     float mouseSensitivity_ = 0.12f;
     float keyboardLookSpeedDegrees_ = 110.0f;
     float fovDegrees_ = 45.0f;
@@ -47,9 +47,9 @@ private:
     float orbitBoundsMargin_ = 0.35f;
 
     void UpdateFps(const InputState& input);
-    void UpdateOrbit(const InputState& input);
+    void UpdateThirdPerson(const InputState& input);
     void ClampPitch(float& pitch) const;
 
     [[nodiscard]] glm::vec3 GetFpsFront() const;
-    [[nodiscard]] glm::vec3 GetOrbitPosition() const;
+    [[nodiscard]] glm::vec3 GetThirdPersonPosition() const;
 };

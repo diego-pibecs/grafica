@@ -140,6 +140,13 @@ int App::Run()
             limiterSleepMs = MillisecondsSince(sleepBegin);
         }
         const double frameWallMs = MillisecondsSince(frameBegin);
+        if (input_.deltaTime > 0.0001f)
+        {
+            const double instantaneousFps = 1.0 / static_cast<double>(input_.deltaTime);
+            displayedFps_ = displayedFps_ <= 0.0
+                ? instantaneousFps
+                : (displayedFps_ * 0.90) + (instantaneousFps * 0.10);
+        }
 
         perfWindowFrames += 1u;
         perfWindowSeconds += static_cast<double>(input_.deltaTime);
@@ -164,11 +171,6 @@ int App::Run()
                 : 0.0;
             const double averageFps = averageFrameSeconds > 0.0 ? 1.0 / averageFrameSeconds : 0.0;
             const double worstFps = perfWorstFrameSeconds > 0.0 ? 1.0 / perfWorstFrameSeconds : 0.0;
-            displayedFps_ = averageFps;
-            if (performanceTitleEnabled_)
-            {
-                UpdateWindowTitle();
-            }
             DebugLog::Info(
                 "Perf",
                 "Frame avgFps=", averageFps,
@@ -237,7 +239,7 @@ bool App::Init()
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
     DebugLog::Info("App", "Creating GLFW window ", framebufferWidth_, "x", framebufferHeight_);
-    window_ = glfwCreateWindow(framebufferWidth_, framebufferHeight_, "Experiencia TOC interactiva", nullptr, nullptr);
+    window_ = glfwCreateWindow(framebufferWidth_, framebufferHeight_, "Kirby Vegetable Valley - Laboratorio P0", nullptr, nullptr);
     if (window_ == nullptr)
     {
         std::cerr << "Failed to create GLFW window\n";
@@ -443,8 +445,8 @@ void App::Update()
 
     if (input_.WasKeyPressed(GLFW_KEY_ESCAPE))
     {
-        DebugLog::Info("Update", "ESC pressed, toggling mouse capture to ", !input_.mouseCaptured);
-        SetMouseCaptured(!input_.mouseCaptured);
+        DebugLog::Info("Update", "ESC pressed, requesting window close");
+        glfwSetWindowShouldClose(window_, GLFW_TRUE);
     }
 
     if (input_.WasKeyPressed(GLFW_KEY_TAB))
@@ -457,13 +459,11 @@ void App::Update()
     if (input_.WasKeyPressed(GLFW_KEY_F3))
     {
         physicsDebugEnabled_ = !physicsDebugEnabled_;
-        performanceTitleEnabled_ = !performanceTitleEnabled_;
         scene_->SetPhysicsDebugEnabled(physicsDebugEnabled_);
         UpdateWindowTitle();
         DebugLog::Info(
             "Update",
-            "F3 pressed, physicsDebugEnabled=", physicsDebugEnabled_,
-            " performanceTitleEnabled=", performanceTitleEnabled_);
+            "F3 pressed, physicsDebugEnabled=", physicsDebugEnabled_);
     }
 
     if (traceCurrentFrame_)
@@ -474,13 +474,31 @@ void App::Update()
     if (input_.WasKeyPressed(GLFW_KEY_E))
     {
         const bool interacted = scene_->TryInteract(camera_.GetPosition(), camera_.GetForward(), player_.GetPosition());
-        DebugLog::Info("Update", "E pressed, doorInteraction=", interacted);
+        DebugLog::Info("Update", "E pressed, sceneInteraction=", interacted);
+    }
+    if (input_.WasKeyPressed(GLFW_KEY_K))
+    {
+        scene_->TriggerKeyframeAnimation();
+        DebugLog::Info("Update", "K pressed, scene keyframe animation triggered");
+    }
+    if (input_.WasKeyPressed(GLFW_KEY_Y))
+    {
+        scene_->ToggleWhispyVariant();
+        DebugLog::Info("Update", "Y pressed, Whispy variant toggle requested");
     }
     if (traceCurrentFrame_)
     {
         DebugLog::Info("Update", "scene_->Update()");
     }
     scene_->Update(player_.GetSnapshot(), input_.lastFrameTime, input_.deltaTime);
+    glm::vec3 teleportPosition;
+    float teleportYawDegrees = 0.0f;
+    if (scene_->ConsumePendingTeleport(teleportPosition, teleportYawDegrees))
+    {
+        player_.SetSpawn(teleportPosition, teleportYawDegrees);
+        camera_.SetPlayerAnchor(player_.GetEyePosition());
+        camera_.SetOrbitTarget(player_.GetOrbitTarget());
+    }
     if (walkableWorld_ != nullptr)
     {
         walkableWorld_->SetDynamicBlockers(scene_->BuildWalkableBlockers());
@@ -543,8 +561,7 @@ void App::Render()
     {
         const PlayerSnapshot& playerSnapshot = player_.GetSnapshot();
         const glm::vec3 cameraPosition = camera_.GetPosition();
-        const char* cameraMode = camera_.GetMode() == CameraMode::Fps ? "FPS" : "ORBIT";
-        const char* movementMode = "NAVMESH";
+        const char* cameraMode = camera_.GetMode() == CameraMode::Fps ? "FPS" : "THIRD";
 
         auto formatVec3 = [](const char* label, const glm::vec3& value)
         {
@@ -557,9 +574,12 @@ void App::Render()
         };
 
         std::vector<std::string> debugLines;
+        std::ostringstream fpsStream;
+        fpsStream << "FPS " << std::fixed << std::setprecision(1) << displayedFps_;
+        debugLines.push_back(fpsStream.str());
         debugLines.push_back(formatVec3("XYZ", playerSnapshot.position));
         debugLines.push_back(formatVec3("CAM", cameraPosition));
-        debugLines.push_back(std::string("MODE ") + movementMode + " / " + cameraMode);
+        debugLines.push_back(std::string("CAMERA ") + cameraMode);
         debugOverlayRenderer_->Render(debugLines, framebufferWidth_, framebufferHeight_);
     }
     if (traceCurrentFrame_)
@@ -578,7 +598,7 @@ void App::SetMouseCaptured(bool captured)
 
 void App::UpdateWindowTitle() const
 {
-    glfwSetWindowTitle(window_, "Experiencia TOC interactiva");
+    glfwSetWindowTitle(window_, "Kirby Vegetable Valley - Laboratorio P0");
 }
 
 void App::FramebufferSizeCallback(GLFWwindow* window, int width, int height)

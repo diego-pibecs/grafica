@@ -14,12 +14,25 @@ uniform vec3 groundAmbientColor;
 uniform vec3 baseColor;
 uniform sampler2D texture_diffuse1;
 uniform sampler2D shadowMap;
+uniform sampler2D dirtTexture;
 uniform bool useTexture;
 uniform bool shadowsEnabled;
 uniform bool pointShadowsEnabled;
+uniform bool floorDirtEnabled;
 uniform float unlitFactor;
 uniform float shininess;
 uniform float specularStrength;
+uniform float pointLightResponse;
+uniform vec3 dirtPathStart;
+uniform vec3 dirtPathEnd;
+uniform float dirtPathWidth;
+uniform float dirtPathBlend;
+uniform float dirtStartRadius;
+uniform float dirtSineAmplitude;
+uniform float dirtTextureScale;
+uniform vec3 sunSuppressionCenter;
+uniform float sunSuppressionRadius;
+uniform float sunSuppressionStrength;
 uniform mat4 lightSpaceMatrix;
 uniform int pointLightCount;
 
@@ -35,6 +48,31 @@ struct PointLight
 #define MAX_POINT_LIGHTS 12
 uniform PointLight pointLights[MAX_POINT_LIGHTS];
 uniform samplerCube pointShadowMaps[MAX_POINT_LIGHTS];
+
+float ComputeDirtMask(vec2 worldXZ)
+{
+    vec2 start = dirtPathStart.xz;
+    vec2 end = dirtPathEnd.xz;
+    vec2 path = end - start;
+    float pathLength = length(path);
+    if (pathLength < 0.001)
+    {
+        return 0.0;
+    }
+
+    vec2 pathDirection = path / pathLength;
+    vec2 pathSide = vec2(-pathDirection.y, pathDirection.x);
+    float t = clamp(dot(worldXZ - start, pathDirection) / pathLength, 0.0, 1.0);
+
+    float sineOffset = sin(t * 6.28318530718) * dirtSineAmplitude;
+    vec2 curvePoint = mix(start, end, t) + (pathSide * sineOffset);
+    float distanceToCurve = length(worldXZ - curvePoint);
+    float pathMask = 1.0 - smoothstep(dirtPathWidth, dirtPathWidth + dirtPathBlend, distanceToCurve);
+
+    float distanceToStart = length(worldXZ - start);
+    float startCircleMask = 1.0 - smoothstep(dirtStartRadius, dirtStartRadius + dirtPathBlend, distanceToStart);
+    return max(pathMask, startCircleMask);
+}
 
 float ComputeShadow(vec3 normal, vec3 lightDir)
 {
@@ -114,6 +152,13 @@ void main()
         discard;
     }
 
+    if (floorDirtEnabled)
+    {
+        float dirtMask = ComputeDirtMask(FragPos.xz);
+        vec4 dirtSample = texture(dirtTexture, FragPos.xz * dirtTextureScale);
+        sampled.rgb = mix(sampled.rgb, dirtSample.rgb, dirtMask * dirtSample.a);
+    }
+
     vec3 albedo = sampled.rgb;
 
     vec3 norm = normalize(Normal);
@@ -130,13 +175,15 @@ void main()
     float ambientMix = clamp((norm.y * 0.5) + 0.5, 0.0, 1.0);
     vec3 ambient = (mix(groundAmbientColor, skyAmbientColor, ambientMix) + (skyAmbientColor * 0.10)) * albedo;
     float shadow = shadowsEnabled ? ComputeShadow(norm, directLightDir) : 0.0;
-    vec3 directDiffuse = diffuseFactor * sunColor * albedo;
-    vec3 directSpecular = specularFactor * sunColor;
+    float sunSuppressionMask = 1.0 - smoothstep(sunSuppressionRadius * 0.72, sunSuppressionRadius, distance(FragPos.xz, sunSuppressionCenter.xz));
+    float sunVisibility = 1.0 - (sunSuppressionMask * sunSuppressionStrength);
+    vec3 directDiffuse = diffuseFactor * sunColor * albedo * sunVisibility;
+    vec3 directSpecular = specularFactor * sunColor * sunVisibility;
     vec3 color = ambient + ((directDiffuse + directSpecular) * (1.0 - shadow));
 
     for (int index = 0; index < pointLightCount && index < MAX_POINT_LIGHTS; ++index)
     {
-        color += EvaluatePointLight(index, pointLights[index], norm, viewDir, albedo);
+        color += EvaluatePointLight(index, pointLights[index], norm, viewDir, albedo) * pointLightResponse;
     }
 
     vec3 evenlyLitColor = albedo * (vec3(0.86) + (sunColor * 0.18));

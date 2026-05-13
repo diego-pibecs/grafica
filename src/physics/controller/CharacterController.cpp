@@ -157,6 +157,10 @@ void CharacterController::Update(const CharacterMoveRequest& request)
     {
         verticalVelocity_ = params_.jumpSpeed;
         state_.grounded = false;
+        if (request.ledgeFallAllowed)
+        {
+            currentPolyRef_ = 0;
+        }
     }
 
     if (walkableWorld_ == nullptr || !walkableWorld_->IsReady())
@@ -184,6 +188,54 @@ void CharacterController::Update(const CharacterMoveRequest& request)
         return;
     }
 
+    auto tryLandOnWalkable = [&]() -> bool
+    {
+        if (verticalVelocity_ > 0.0f)
+        {
+            return false;
+        }
+
+        WalkableSample sample;
+        const glm::vec3 queryPosition(state_.position.x, state_.position.y, state_.position.z);
+        const float searchRadius = std::max(params_.radius * 0.35f, 0.12f);
+        if (!walkableWorld_->SamplePosition(queryPosition, searchRadius, sample) || !sample.valid)
+        {
+            return false;
+        }
+
+        const float verticalDelta = state_.position.y - sample.position.y;
+        if (verticalDelta > 0.10f || verticalDelta < -0.90f)
+        {
+            return false;
+        }
+
+        state_.position = sample.position;
+        state_.grounded = true;
+        state_.groundNormal = kWorldUp;
+        groundHeight_ = sample.position.y;
+        verticalVelocity_ = 0.0f;
+        currentPolyRef_ = sample.polyRef;
+        return true;
+    };
+
+    if (!state_.grounded && request.ledgeFallAllowed)
+    {
+        const glm::vec3 previousPosition = state_.position;
+        state_.position.x += desiredDelta.x;
+        state_.position.z += desiredDelta.z;
+        verticalVelocity_ -= params_.gravity * request.dt;
+        state_.position.y += verticalVelocity_ * request.dt;
+        tryLandOnWalkable();
+
+        state_.velocity = request.dt > 0.0f
+            ? (state_.position - previousPosition) / request.dt
+            : glm::vec3(0.0f);
+        state_.groundNormal = kWorldUp;
+        state_.slopeBlocked = false;
+        AppendCapsuleDebug(state_.position, state_.grounded ? glm::vec3(0.2f, 1.0f, 0.3f) : glm::vec3(1.0f, 0.55f, 0.2f));
+        return;
+    }
+
     if (currentPolyRef_ == 0 && !SnapToWalkable(std::max(params_.radius * 4.0f, 1.25f)))
     {
         state_.velocity = glm::vec3(0.0f);
@@ -203,6 +255,31 @@ void CharacterController::Update(const CharacterMoveRequest& request)
     }
 
     const glm::vec3 previousPosition = state_.position;
+    if (request.ledgeFallAllowed && moveResult.blocked && glm::length(desiredDelta) > 0.0001f)
+    {
+        WalkableSample desiredSample;
+        const bool hasWalkableAtDesired = walkableWorld_->SamplePosition(
+            desiredPosition,
+            std::max(params_.radius * 0.35f, 0.12f),
+            desiredSample) && desiredSample.valid;
+        if (!hasWalkableAtDesired)
+        {
+            state_.position.x = desiredPosition.x;
+            state_.position.z = desiredPosition.z;
+            state_.position.y = groundHeight_;
+            state_.grounded = false;
+            verticalVelocity_ = 0.0f;
+            currentPolyRef_ = 0;
+            state_.velocity = request.dt > 0.0f
+                ? (state_.position - previousPosition) / request.dt
+                : glm::vec3(0.0f);
+            state_.groundNormal = kWorldUp;
+            state_.slopeBlocked = false;
+            AppendCapsuleDebug(state_.position, glm::vec3(1.0f, 0.55f, 0.2f));
+            return;
+        }
+    }
+
     groundHeight_ = moveResult.position.y;
     currentPolyRef_ = moveResult.polyRef;
     state_.position.x = moveResult.position.x;
