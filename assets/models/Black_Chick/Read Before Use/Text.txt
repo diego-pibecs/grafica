@@ -1,0 +1,46 @@
+
+Thank you for downloading Black_Chick model.I believe it would be useful for your amazing games or will cover any of your needs:)
+
+If you like this model, be sure to check out the rest of my collection in the store. 
+
+Feel free to use and edit this scene for your games or for your own learning, but please don’t share it with others or try to resell it.
+
+Please note that each animation should be seamless and perfectly loopable. 
+
+This can be achieved by setting the correct frame range and FPS; Otherwise, the animation may get cut during playback.
+
+For every animation:
+
+-Keep a consistent frame rate of 24 FPS.
+
+-The number of Frames will vary depending on the animation (you can find the frame ranges below,in the Maya files or in product description).
+
+Please make sure to manually set both the FPS (24) and the total number of Frames in your animation software to ensure consistency and avoid any issues.
+
+Animations:
+
+-Feed animation at 24 FPS, Frame range 0-160;
+-Flying animation at 24 FPS, Frame range 0-98;
+-Idle animation at 24 FPS, Frame range 0-120;
+-Run animation at 24 FPS, Frame range 0-16;
+-Walk_Look_Around at 24 FPS, Frame range 0-120;
+-Walk animation at 24 FPS, Frame range 0-24.
+
+Please note: FBX files contain baked animations and do not require mGear.
+
+The mGear plugin is only needed if you want to edit the rig inside the Maya scene.
+
+To use animations and rig in Maya you need to instal MGear plugin, which is very easy to import in Maya scene by dragging file in Maya scene.
+
+Here is website where you could find free Mgear plugin and learn more about it:
+https://www.mgear-framework.com/
+
+Also you could find archive Mgear plugin in Mgear_plugin folder.
+
+Here is video how to install Mgear plugin:
+https://www.youtube.com/watch?v=Wf-JCkBVqKM
+
+In case you have any questions or issues please let me know by contacting me directly:
+alesia.brn@gmail.com
+
+
