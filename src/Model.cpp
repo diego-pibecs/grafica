@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -18,7 +19,9 @@
 #include <assimp/scene.h>
 
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include "DebugLog.h"
+#include "ShaderProgram.h"
 #include "TextureUtils.h"
 
 namespace fs = std::filesystem;
@@ -211,10 +214,32 @@ glm::mat4 AiToGlm(const aiMatrix4x4& matrix)
     result[3][3] = matrix.d4;
     return result;
 }
+
+glm::vec3 AiToGlm(const aiVector3D& value)
+{
+    return glm::vec3(value.x, value.y, value.z);
+}
+
+glm::quat AiToGlm(const aiQuaternion& value)
+{
+    return glm::quat(value.w, value.x, value.y, value.z);
+}
+
+bool IsKirbySourceName(const std::string& sourceFilename)
+{
+    return sourceFilename.find("kirby") != std::string::npos || sourceFilename.find("kirb") != std::string::npos;
+}
 }
 
 Model::Model(const std::filesystem::path& path, bool loadTextures)
     : loadTextures_(loadTextures)
+{
+    LoadModel(path);
+}
+
+Model::Model(const std::filesystem::path& path, bool loadTextures, ModelLoadOptions options)
+    : loadOptions_(std::move(options))
+    , loadTextures_(loadTextures)
 {
     LoadModel(path);
 }
@@ -253,6 +278,69 @@ void Model::DrawWithoutTextures() const
     }
 }
 
+bool Model::ApplyAnimation(const std::string& preferredClipName, float timeSeconds)
+{
+    if (!HasSkeletalAnimation())
+    {
+        return false;
+    }
+
+    const AnimationClip* clip = FindAnimationClip(preferredClipName);
+    if (clip == nullptr || clip->duration <= 0.0f)
+    {
+        return false;
+    }
+
+    const bool clipChanged = activeAnimationClip_ != clip->name;
+    if (clipChanged)
+    {
+        activeAnimationClip_ = clip->name;
+        DebugLog::Info("ANIM", "Runtime skeletal clip source=", sourceFilename_, " clip=", activeAnimationClip_);
+    }
+
+    const float ticksPerSecond = clip->ticksPerSecond > 0.0f ? clip->ticksPerSecond : 25.0f;
+    const float animationTime = std::fmod(timeSeconds * ticksPerSecond, clip->duration);
+    std::fill(finalBoneMatrices_.begin(), finalBoneMatrices_.end(), glm::mat4(1.0f));
+    CalculateBoneTransform(rootAnimationNode_, glm::mat4(1.0f), *clip, animationTime);
+    if (clipChanged && IsKirbySourceName(sourceFilename_))
+    {
+        bool hasBadMatrix = false;
+        float maxAbsValue = 0.0f;
+        const std::size_t matrixCount = std::min<std::size_t>(5u, finalBoneMatrices_.size());
+        for (std::size_t matrixIndex = 0; matrixIndex < matrixCount; ++matrixIndex)
+        {
+            const glm::mat4& matrix = finalBoneMatrices_[matrixIndex];
+            for (int column = 0; column < 4; ++column)
+            {
+                for (int row = 0; row < 4; ++row)
+                {
+                    const float value = matrix[column][row];
+                    hasBadMatrix = hasBadMatrix || !std::isfinite(value);
+                    maxAbsValue = std::max(maxAbsValue, std::abs(value));
+                }
+            }
+            DebugLog::Info(
+                "ANIM",
+                "Kirby finalBoneMatrix clip=", clip->name,
+                " index=", matrixIndex,
+                " row0=(",
+                matrix[0][0], ", ", matrix[1][0], ", ", matrix[2][0], ", ", matrix[3][0], ")");
+        }
+        DebugLog::Info(
+            "ANIM",
+            "Kirby runtime diagnostics clip=", clip->name,
+            " animationTime=", animationTime,
+            " hasNaNOrInf=", hasBadMatrix ? "yes" : "no",
+            " maxAbsMatrixValue=", maxAbsValue);
+    }
+    return true;
+}
+
+void Model::UploadBoneMatrices(const ShaderProgram& shader) const
+{
+    shader.SetMat4Array("finalBonesMatrices", finalBoneMatrices_);
+}
+
 bool Model::IsLoaded() const noexcept
 {
     return isLoaded_;
@@ -261,6 +349,92 @@ bool Model::IsLoaded() const noexcept
 bool Model::HasTextures() const noexcept
 {
     return std::any_of(meshes_.begin(), meshes_.end(), [](const Mesh& mesh) { return mesh.HasTexture(); });
+}
+
+bool Model::HasSkeletalAnimation() const noexcept
+{
+    return !boneLimitExceeded_ && !animationClips_.empty() && !boneInfoMap_.empty() && boneCounter_ > 0 && boneCounter_ <= kMaxBones;
+}
+
+void Model::InspectAssimpScene(const std::filesystem::path& path)
+{
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(
+        path.string(),
+        aiProcess_Triangulate
+            | aiProcess_GenSmoothNormals
+            | aiProcess_JoinIdenticalVertices
+            | aiProcess_LimitBoneWeights);
+    if (scene == nullptr || scene->mRootNode == nullptr)
+    {
+        DebugLog::Info("FBX INSPECT", "path=", path.string(), " failed=", importer.GetErrorString());
+        return;
+    }
+
+    DebugLog::Info(
+        "FBX INSPECT",
+        "path=", path.string(),
+        " meshes=", scene->mNumMeshes,
+        " materials=", scene->mNumMaterials,
+        " animations=", scene->mNumAnimations,
+        " root=", scene->mRootNode->mName.C_Str());
+
+    std::function<void(const aiNode*, int)> logNode = [&](const aiNode* node, int depth)
+    {
+        if (node == nullptr)
+        {
+            return;
+        }
+        std::string indent(static_cast<std::size_t>(std::min(depth, 8)) * 2u, ' ');
+        std::string meshList;
+        for (unsigned int meshRefIndex = 0; meshRefIndex < node->mNumMeshes; ++meshRefIndex)
+        {
+            const unsigned int meshIndex = node->mMeshes[meshRefIndex];
+            const aiMesh* mesh = scene->mMeshes[meshIndex];
+            if (!meshList.empty())
+            {
+                meshList += ", ";
+            }
+            meshList += std::to_string(meshIndex);
+            meshList += ":";
+            meshList += mesh != nullptr ? mesh->mName.C_Str() : "<null>";
+        }
+        DebugLog::Info(
+            "FBX INSPECT",
+            indent,
+            "Node=", node->mName.C_Str(),
+            " meshes=[", meshList, "] children=", node->mNumChildren);
+        for (unsigned int childIndex = 0; childIndex < node->mNumChildren; ++childIndex)
+        {
+            logNode(node->mChildren[childIndex], depth + 1);
+        }
+    };
+    logNode(scene->mRootNode, 0);
+
+    for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex)
+    {
+        const aiMesh* mesh = scene->mMeshes[meshIndex];
+        DebugLog::Info(
+            "FBX INSPECT",
+            "Mesh ", meshIndex,
+            " name=", mesh->mName.C_Str(),
+            " vertices=", mesh->mNumVertices,
+            " faces=", mesh->mNumFaces,
+            " material=", mesh->mMaterialIndex,
+            " bones=", mesh->mNumBones);
+    }
+
+    for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex)
+    {
+        const aiAnimation* animation = scene->mAnimations[animationIndex];
+        DebugLog::Info(
+            "FBX INSPECT",
+            "Clip ", animationIndex,
+            " name=", animation->mName.C_Str(),
+            " duration=", animation->mDuration,
+            " ticksPerSecond=", animation->mTicksPerSecond,
+            " channels=", animation->mNumChannels);
+    }
 }
 
 glm::vec3 Model::GetMinBounds() const noexcept
@@ -306,6 +480,12 @@ void Model::LoadModel(const std::filesystem::path& path)
     removedDegenerateTriangleCount_ = 0;
     animationCount_ = 0;
     boneCount_ = 0;
+    boneCounter_ = 0;
+    boneInfoMap_.clear();
+    animationClips_.clear();
+    finalBoneMatrices_.assign(static_cast<std::size_t>(kMaxBones), glm::mat4(1.0f));
+    activeAnimationClip_.clear();
+    boneLimitExceeded_ = false;
 
     Assimp::Importer importer;
     DebugLog::Info("Model", "ReadFile begin path=", path.string(), " loadTextures=", loadTextures_);
@@ -329,6 +509,8 @@ void Model::LoadModel(const std::filesystem::path& path)
     directory_ = path.parent_path();
     sourceFilename_ = ToLowerAscii(path.filename().string());
     animationCount_ = scene->mNumAnimations;
+    rootAnimationNode_ = BuildAnimationNodeTree(scene->mRootNode);
+    globalInverseTransform_ = glm::inverse(AiToGlm(scene->mRootNode->mTransformation));
     DebugLog::Info(
         "Model",
         "Scene stats path=", path.string(),
@@ -336,6 +518,18 @@ void Model::LoadModel(const std::filesystem::path& path)
         " materials=", scene->mNumMaterials,
         " textures=", scene->mNumTextures,
         " animations=", scene->mNumAnimations);
+    if (IsKirbySourceName(sourceFilename_))
+    {
+        DebugLog::Info(
+            "ANIM",
+            "Kirby diagnostics path=", path.string(),
+            " rootNode=", scene->mRootNode != nullptr ? scene->mRootNode->mName.C_Str() : "<null>",
+            " globalInverseTransform[3]=(",
+            globalInverseTransform_[3][0], ", ",
+            globalInverseTransform_[3][1], ", ",
+            globalInverseTransform_[3][2], ", ",
+            globalInverseTransform_[3][3], ")");
+    }
     for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex)
     {
         const aiAnimation* animation = scene->mAnimations[animationIndex];
@@ -362,14 +556,33 @@ void Model::LoadModel(const std::filesystem::path& path)
                 " scalingKeys=", channel->mNumScalingKeys);
         }
     }
-    ProcessNode(scene->mRootNode, scene, glm::mat4(1.0f), "");
+    LoadAnimations(scene);
+    if (!loadOptions_.onlyNodeName.empty())
+    {
+        const aiNode* selectedNode = FindNodeByName(scene->mRootNode, loadOptions_.onlyNodeName);
+        if (selectedNode != nullptr)
+        {
+            DebugLog::Info("FBX INSPECT", "Selected node for load source=", sourceFilename_, " node=", loadOptions_.onlyNodeName);
+            ProcessNode(const_cast<aiNode*>(selectedNode), scene, glm::mat4(1.0f), "");
+        }
+        else
+        {
+            DebugLog::Info("FBX INSPECT", "Requested node not found source=", sourceFilename_, " node=", loadOptions_.onlyNodeName, " loading full scene");
+            ProcessNode(scene->mRootNode, scene, glm::mat4(1.0f), "");
+        }
+    }
+    else
+    {
+        ProcessNode(scene->mRootNode, scene, glm::mat4(1.0f), "");
+    }
     DebugLog::Info(
         "ANIM",
         "Model=", sourceFilename_,
         " animations=", animationCount_,
         " bones=", boneCount_,
-        " supportsSkeletalAnimation=", (animationCount_ > 0 && boneCount_ > 0 ? "yes" : "no"),
-        " runtimeMode=", (animationCount_ > 0 && boneCount_ > 0 ? "procedural-fallback" : "static/procedural"));
+        " supportsSkeletalAnimation=", (HasSkeletalAnimation() ? "yes" : "no"),
+        " boneLimitExceeded=", (boneLimitExceeded_ ? "yes" : "no"),
+        " runtimeMode=", (HasSkeletalAnimation() ? "skinning-runtime" : "static/procedural"));
     isLoaded_ = !meshes_.empty();
     DebugLog::Info(
         "Model",
@@ -382,6 +595,365 @@ void Model::LoadModel(const std::filesystem::path& path)
         " removedDuplicates=", removedDuplicateTriangleCount_,
         " removedDegenerate=", removedDegenerateTriangleCount_);
     triangleKeys_.clear();
+}
+
+const aiNode* Model::FindNodeByName(const aiNode* node, const std::string& nodeName) const
+{
+    if (node == nullptr)
+    {
+        return nullptr;
+    }
+    if (node->mName.C_Str() == nodeName)
+    {
+        return node;
+    }
+    for (unsigned int childIndex = 0; childIndex < node->mNumChildren; ++childIndex)
+    {
+        if (const aiNode* result = FindNodeByName(node->mChildren[childIndex], nodeName))
+        {
+            return result;
+        }
+    }
+    return nullptr;
+}
+
+Model::AnimationNode Model::BuildAnimationNodeTree(const aiNode* node) const
+{
+    AnimationNode result;
+    if (node == nullptr)
+    {
+        return result;
+    }
+
+    result.name = node->mName.length > 0 ? std::string(node->mName.C_Str()) : "node";
+    result.transform = AiToGlm(node->mTransformation);
+    result.children.reserve(node->mNumChildren);
+    for (unsigned int childIndex = 0; childIndex < node->mNumChildren; ++childIndex)
+    {
+        result.children.push_back(BuildAnimationNodeTree(node->mChildren[childIndex]));
+    }
+    return result;
+}
+
+void Model::LoadAnimations(const aiScene* scene)
+{
+    animationClips_.clear();
+    if (scene == nullptr)
+    {
+        return;
+    }
+
+    animationClips_.reserve(scene->mNumAnimations);
+    for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex)
+    {
+        const aiAnimation* sourceAnimation = scene->mAnimations[animationIndex];
+        AnimationClip clip;
+        clip.name = sourceAnimation->mName.length > 0
+            ? std::string(sourceAnimation->mName.C_Str())
+            : ("Animation " + std::to_string(animationIndex));
+        clip.duration = static_cast<float>(sourceAnimation->mDuration);
+        clip.ticksPerSecond = sourceAnimation->mTicksPerSecond > 0.0
+            ? static_cast<float>(sourceAnimation->mTicksPerSecond)
+            : 25.0f;
+
+        for (unsigned int channelIndex = 0; channelIndex < sourceAnimation->mNumChannels; ++channelIndex)
+        {
+            const aiNodeAnim* sourceChannel = sourceAnimation->mChannels[channelIndex];
+            BoneChannel channel;
+            channel.name = sourceChannel->mNodeName.C_Str();
+            channel.positions.reserve(sourceChannel->mNumPositionKeys);
+            channel.rotations.reserve(sourceChannel->mNumRotationKeys);
+            channel.scales.reserve(sourceChannel->mNumScalingKeys);
+
+            for (unsigned int keyIndex = 0; keyIndex < sourceChannel->mNumPositionKeys; ++keyIndex)
+            {
+                channel.positions.push_back(KeyPosition {
+                    AiToGlm(sourceChannel->mPositionKeys[keyIndex].mValue),
+                    static_cast<float>(sourceChannel->mPositionKeys[keyIndex].mTime)
+                });
+            }
+            for (unsigned int keyIndex = 0; keyIndex < sourceChannel->mNumRotationKeys; ++keyIndex)
+            {
+                channel.rotations.push_back(KeyRotation {
+                    glm::normalize(AiToGlm(sourceChannel->mRotationKeys[keyIndex].mValue)),
+                    static_cast<float>(sourceChannel->mRotationKeys[keyIndex].mTime)
+                });
+            }
+            for (unsigned int keyIndex = 0; keyIndex < sourceChannel->mNumScalingKeys; ++keyIndex)
+            {
+                channel.scales.push_back(KeyScale {
+                    AiToGlm(sourceChannel->mScalingKeys[keyIndex].mValue),
+                    static_cast<float>(sourceChannel->mScalingKeys[keyIndex].mTime)
+                });
+            }
+            clip.channels[channel.name] = std::move(channel);
+        }
+
+        animationClips_.push_back(std::move(clip));
+    }
+}
+
+void Model::SetVertexBoneData(Vertex& vertex, int boneId, float weight) const
+{
+    for (int index = 0; index < 4; ++index)
+    {
+        if (vertex.boneIDs[index] < 0)
+        {
+            vertex.boneIDs[index] = boneId;
+            vertex.weights[index] = weight;
+            return;
+        }
+    }
+}
+
+void Model::ExtractBoneWeights(aiMesh* mesh, std::vector<Vertex>& vertices)
+{
+    if (mesh == nullptr)
+    {
+        return;
+    }
+
+    std::vector<int> originalInfluenceCounts(vertices.size(), 0);
+    std::size_t discardedInfluences = 0;
+    const bool kirbyDiagnostics = IsKirbySourceName(sourceFilename_);
+
+    for (unsigned int boneIndex = 0; boneIndex < mesh->mNumBones; ++boneIndex)
+    {
+        aiBone* sourceBone = mesh->mBones[boneIndex];
+        const std::string boneName = sourceBone->mName.C_Str();
+        int boneId = -1;
+        const auto existingBone = boneInfoMap_.find(boneName);
+        if (existingBone == boneInfoMap_.end())
+        {
+            if (boneCounter_ >= kMaxBones)
+            {
+                if (!boneLimitExceeded_)
+                {
+                    DebugLog::Info("ANIM", "Bone limit exceeded source=", sourceFilename_, " limit=", kMaxBones);
+                }
+                boneLimitExceeded_ = true;
+                continue;
+            }
+
+            boneId = boneCounter_;
+            BoneInfo info;
+            info.id = boneId;
+            info.offset = AiToGlm(sourceBone->mOffsetMatrix);
+            boneInfoMap_[boneName] = info;
+            boneCounter_ += 1;
+        }
+        else
+        {
+            boneId = existingBone->second.id;
+        }
+
+        if (kirbyDiagnostics)
+        {
+            const glm::mat4 offset = AiToGlm(sourceBone->mOffsetMatrix);
+            DebugLog::Info(
+                "ANIM",
+                "Kirby bone mesh=", mesh->mName.C_Str(),
+                " id=", boneId,
+                " name=", boneName,
+                " hasNode=", AnimationNodeContains(rootAnimationNode_, boneName) ? "yes" : "no",
+                " hasChannel=", ClipHasChannelForNode(boneName) ? "yes" : "no",
+                " offset[3]=(",
+                offset[3][0], ", ",
+                offset[3][1], ", ",
+                offset[3][2], ", ",
+                offset[3][3], ")");
+        }
+
+        for (unsigned int weightIndex = 0; weightIndex < sourceBone->mNumWeights; ++weightIndex)
+        {
+            const aiVertexWeight& sourceWeight = sourceBone->mWeights[weightIndex];
+            if (sourceWeight.mVertexId < vertices.size())
+            {
+                originalInfluenceCounts[sourceWeight.mVertexId] += 1;
+                if (originalInfluenceCounts[sourceWeight.mVertexId] > 4)
+                {
+                    discardedInfluences += 1;
+                }
+                SetVertexBoneData(vertices[sourceWeight.mVertexId], boneId, sourceWeight.mWeight);
+            }
+        }
+    }
+
+    std::size_t verticesWithoutWeights = 0;
+    std::size_t nonUnitWeightVertices = 0;
+    int maxOriginalInfluences = 0;
+    for (Vertex& vertex : vertices)
+    {
+        const float weightSum = vertex.weights.x + vertex.weights.y + vertex.weights.z + vertex.weights.w;
+        if (weightSum > 0.0f)
+        {
+            if (std::abs(weightSum - 1.0f) > 0.01f)
+            {
+                nonUnitWeightVertices += 1;
+            }
+            vertex.weights /= weightSum;
+        }
+        else
+        {
+            verticesWithoutWeights += 1;
+        }
+    }
+    for (int influenceCount : originalInfluenceCounts)
+    {
+        maxOriginalInfluences = std::max(maxOriginalInfluences, influenceCount);
+    }
+
+    if (kirbyDiagnostics)
+    {
+        DebugLog::Info(
+            "ANIM",
+            "Kirby mesh weights mesh=", mesh->mName.C_Str(),
+            " vertices=", vertices.size(),
+            " bones=", mesh->mNumBones,
+            " verticesWithoutWeights=", verticesWithoutWeights,
+            " nonUnitWeightVerticesBeforeNormalize=", nonUnitWeightVertices,
+            " maxOriginalInfluences=", maxOriginalInfluences,
+            " discardedInfluences=", discardedInfluences);
+    }
+}
+
+const Model::AnimationClip* Model::FindAnimationClip(const std::string& preferredClipName) const
+{
+    if (animationClips_.empty())
+    {
+        return nullptr;
+    }
+
+    const std::string preferred = ToLowerAscii(preferredClipName);
+    if (!preferred.empty())
+    {
+        for (const AnimationClip& clip : animationClips_)
+        {
+            if (ToLowerAscii(clip.name).find(preferred) != std::string::npos)
+            {
+                return &clip;
+            }
+        }
+    }
+    return &animationClips_.front();
+}
+
+bool Model::AnimationNodeContains(const AnimationNode& node, const std::string& name) const
+{
+    if (node.name == name)
+    {
+        return true;
+    }
+    for (const AnimationNode& child : node.children)
+    {
+        if (AnimationNodeContains(child, name))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Model::ClipHasChannelForNode(const std::string& nodeName) const
+{
+    for (const AnimationClip& clip : animationClips_)
+    {
+        if (clip.channels.find(nodeName) != clip.channels.end())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+glm::mat4 Model::InterpolateChannelTransform(const BoneChannel& channel, float animationTime) const
+{
+    glm::vec3 position(0.0f);
+    if (channel.positions.size() == 1u)
+    {
+        position = channel.positions.front().position;
+    }
+    else if (!channel.positions.empty())
+    {
+        std::size_t keyIndex = 0;
+        while (keyIndex + 1u < channel.positions.size() && animationTime > channel.positions[keyIndex + 1u].timeStamp)
+        {
+            keyIndex += 1u;
+        }
+        const KeyPosition& current = channel.positions[keyIndex];
+        const KeyPosition& next = channel.positions[std::min(keyIndex + 1u, channel.positions.size() - 1u)];
+        const float span = std::max(next.timeStamp - current.timeStamp, 0.001f);
+        const float factor = std::clamp((animationTime - current.timeStamp) / span, 0.0f, 1.0f);
+        position = glm::mix(current.position, next.position, factor);
+    }
+
+    glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
+    if (channel.rotations.size() == 1u)
+    {
+        rotation = channel.rotations.front().orientation;
+    }
+    else if (!channel.rotations.empty())
+    {
+        std::size_t keyIndex = 0;
+        while (keyIndex + 1u < channel.rotations.size() && animationTime > channel.rotations[keyIndex + 1u].timeStamp)
+        {
+            keyIndex += 1u;
+        }
+        const KeyRotation& current = channel.rotations[keyIndex];
+        const KeyRotation& next = channel.rotations[std::min(keyIndex + 1u, channel.rotations.size() - 1u)];
+        const float span = std::max(next.timeStamp - current.timeStamp, 0.001f);
+        const float factor = std::clamp((animationTime - current.timeStamp) / span, 0.0f, 1.0f);
+        rotation = glm::normalize(glm::slerp(current.orientation, next.orientation, factor));
+    }
+
+    glm::vec3 scale(1.0f);
+    if (channel.scales.size() == 1u)
+    {
+        scale = channel.scales.front().scale;
+    }
+    else if (!channel.scales.empty())
+    {
+        std::size_t keyIndex = 0;
+        while (keyIndex + 1u < channel.scales.size() && animationTime > channel.scales[keyIndex + 1u].timeStamp)
+        {
+            keyIndex += 1u;
+        }
+        const KeyScale& current = channel.scales[keyIndex];
+        const KeyScale& next = channel.scales[std::min(keyIndex + 1u, channel.scales.size() - 1u)];
+        const float span = std::max(next.timeStamp - current.timeStamp, 0.001f);
+        const float factor = std::clamp((animationTime - current.timeStamp) / span, 0.0f, 1.0f);
+        scale = glm::mix(current.scale, next.scale, factor);
+    }
+
+    return glm::translate(glm::mat4(1.0f), position)
+        * glm::mat4_cast(rotation)
+        * glm::scale(glm::mat4(1.0f), scale);
+}
+
+void Model::CalculateBoneTransform(const AnimationNode& node, const glm::mat4& parentTransform, const AnimationClip& clip, float animationTime)
+{
+    glm::mat4 nodeTransform = node.transform;
+    const auto channel = clip.channels.find(node.name);
+    if (channel != clip.channels.end())
+    {
+        nodeTransform = InterpolateChannelTransform(channel->second, animationTime);
+    }
+
+    const glm::mat4 globalTransform = parentTransform * nodeTransform;
+    const auto bone = boneInfoMap_.find(node.name);
+    if (bone != boneInfoMap_.end())
+    {
+        const int id = bone->second.id;
+        if (id >= 0 && id < static_cast<int>(finalBoneMatrices_.size()))
+        {
+            finalBoneMatrices_[static_cast<std::size_t>(id)] = globalInverseTransform_ * globalTransform * bone->second.offset;
+        }
+    }
+
+    for (const AnimationNode& child : node.children)
+    {
+        CalculateBoneTransform(child, globalTransform, clip, animationTime);
+    }
 }
 
 void Model::ProcessNode(
@@ -408,6 +980,11 @@ void Model::ProcessNode(
         meshes_.push_back(ProcessMesh(mesh, scene, nodeTransform));
     }
 
+    if (!loadOptions_.onlyNodeName.empty() && !loadOptions_.includeChildren && parentPath.empty())
+    {
+        return;
+    }
+
     for (unsigned int childIndex = 0; childIndex < node->mNumChildren; ++childIndex)
     {
         ProcessNode(node->mChildren[childIndex], scene, nodeTransform, nodePath);
@@ -428,6 +1005,7 @@ Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nod
             " mesh=", mesh->mName.C_Str(),
             " bones=", mesh->mNumBones);
     }
+    const bool skinnedMesh = mesh->mNumBones > 0 && !IsKirbySourceName(sourceFilename_);
     const glm::mat3 normalTransform = glm::inverseTranspose(glm::mat3(nodeTransform));
     glm::vec3 meshMin(std::numeric_limits<float>::max());
     glm::vec3 meshMax(std::numeric_limits<float>::lowest());
@@ -441,10 +1019,11 @@ Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nod
             mesh->mVertices[vertexIndex].y,
             mesh->mVertices[vertexIndex].z,
             1.0f);
-        vertex.position = glm::vec3(nodeTransform * sourcePosition);
-        ExpandBounds(vertex.position);
-        meshMin = glm::min(meshMin, vertex.position);
-        meshMax = glm::max(meshMax, vertex.position);
+        const glm::vec3 transformedPosition = glm::vec3(nodeTransform * sourcePosition);
+        vertex.position = skinnedMesh ? glm::vec3(sourcePosition) : transformedPosition;
+        ExpandBounds(transformedPosition);
+        meshMin = glm::min(meshMin, transformedPosition);
+        meshMax = glm::max(meshMax, transformedPosition);
 
         if (mesh->HasNormals())
         {
@@ -452,7 +1031,7 @@ Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nod
                 mesh->mNormals[vertexIndex].x,
                 mesh->mNormals[vertexIndex].y,
                 mesh->mNormals[vertexIndex].z);
-            vertex.normal = glm::normalize(normalTransform * sourceNormal);
+            vertex.normal = skinnedMesh ? glm::normalize(sourceNormal) : glm::normalize(normalTransform * sourceNormal);
         }
         else
         {
@@ -472,6 +1051,8 @@ Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nod
 
         vertices.push_back(vertex);
     }
+
+    ExtractBoneWeights(mesh, vertices);
 
     for (unsigned int faceIndex = 0; faceIndex < mesh->mNumFaces; ++faceIndex)
     {

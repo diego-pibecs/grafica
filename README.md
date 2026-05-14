@@ -33,6 +33,7 @@ cmake --build build --target grafica_bbb_base -j 8
 - `Shift`: sprint.
 - `F3`: debug de navmesh, bloqueadores y actor.
 - `ESC` o `Q`: cerrar.
+- La ventana es redimensionable y puede maximizarse/minimizarse desde el sistema operativo.
 
 ## Demo esperada
 
@@ -45,8 +46,8 @@ cmake --build build --target grafica_bbb_base -j 8
 6. Cambiar a tercera persona con `TAB` y ver a Kirby.
 7. Avanzar por la zona 2: plataforma suspendida con vacio, salto libre entre plataformas moradas y una luz guia dinamica que marca el siguiente paso.
 8. Si se cae al vacio, aparece "INTENTALO DE NUEVO", baja una vida y se regresa a zona 1; al perder todas las vidas aparece "GAME OVER" y se reinicia el flujo.
-9. Ver el murcielago decorativo en zona 2, subir hasta la cima, que funciona como entrada a la zona 3, y ver Whispy Woods.
-10. Tocar al pollo, murcielago o Whispy resta una vida y regresa a zona 1; el portal queda reutilizable si ya se habia recogido su estrella.
+9. Ver el murcielago decorativo en zona 2 patrullando en X, subir hasta la cima, que funciona como entrada a la zona 3, y ver Whispy Woods.
+10. Tocar a los enemigos patrulleros, murcielago o Whispy resta una vida y regresa a zona 1; el portal queda reutilizable si ya se habia recogido su estrella.
 11. Apuntar a Whispy y usar `E`, o usar `K`, para ver la manzana animada por keyframes fuera del tronco.
 12. Con tres estrellas, interactuar con Whispy para activar su derrota: rota, reduce escala y desaparece.
 13. Cerrar sin errores.
@@ -76,7 +77,9 @@ cmake --build build --target grafica_bbb_base -j 8
 - Sombras direccionales sobre modelos principales; las paredes limitadoras no reciben sombras.
 - La zona 2 atenúa la luz direccional del sol y usa una luz guia dinamica que se mueve hacia la siguiente plataforma segun la superficie actual del jugador.
 - Estrellas verticales con material amarillo autoiluminado, sin bolita de luz externa: estrella del portal, estrella escondida en zona 1 y estrella de la cima.
-- Props tematicos importados: pollo en zona 1 y murcielago en zona 2. Assimp registra animaciones y bones cuando existen; por ahora se usa animacion procedural visible para Kirby, pollo y murcielago, sin skinning esqueletal en runtime.
+- Props tematicos importados: enemigos en zona 1 y murcielago en zona 2. Assimp registra animaciones y bones cuando existen; el murcielago usa skinning esqueletal con `Bat|Flying`. Kirby conserva animacion procedural sobre el FBX real porque el skinning del FBX de Kirby deforma el modelo en runtime. Los enemigos de `assets/models/enemigos/` usan clips idle cuando son compatibles y patrullas procedurales.
+- Animacion esqueletal minima: los vertices soportan hasta cuatro influencias de hueso y `assets/shaders/lit.vs` aplica `finalBonesMatrices` cuando `useSkinning` esta activo. Los modelos estaticos siguen usando el flujo normal.
+- Patrullas simples: dos enemigos recorren la zona 1 entre puntos definidos y el murcielago se mueve lateralmente en la zona 2, todos con giro interpolado.
 - Parkour extendido en zona 2 con plataformas de distintos tamanos y alturas: `zone-two-step-f`, `zone-two-step-g`, `zone-two-final-approach` y `zone-two-summit`.
 
 ## Carpetas importantes
@@ -85,7 +88,7 @@ cmake --build build --target grafica_bbb_base -j 8
 - `assets/models/whispy-woods/`: modelo FBX de Whispy Woods.
 - `assets/models/nuevos/star.obj`: estrellas coleccionables y marcador final.
 - `assets/models/nature/`: vegetacion decorativa de zona 1; los props grandes aportan obstaculos y los pequenos no bloquean.
-- `assets/models/Black_Chick/`: pollo decorativo de zona 1.
+- `assets/models/enemigos/`: enemigos patrulleros de zona 1.
 - `assets/models/animated-halloween-bat/`: murcielago decorativo de zona 2.
 - `assets/textures/grass/`, `assets/textures/dirt/`, `assets/textures/skybox/`: texturas del escenario.
 - `src/navigation/`: navmesh Recast/Detour.

@@ -237,9 +237,10 @@ bool App::Init()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     DebugLog::Info("App", "Creating GLFW window ", framebufferWidth_, "x", framebufferHeight_);
-    window_ = glfwCreateWindow(framebufferWidth_, framebufferHeight_, "Kirby Vegetable Valley - Laboratorio P0", nullptr, nullptr);
+    window_ = glfwCreateWindow(framebufferWidth_, framebufferHeight_, "Kirby Vegetable Valley - Laboratorio P1", nullptr, nullptr);
     if (window_ == nullptr)
     {
         std::cerr << "Failed to create GLFW window\n";
@@ -547,6 +548,11 @@ void App::Render()
     {
         DebugLog::Info("Render", "Begin render");
     }
+    if (framebufferWidth_ <= 0 || framebufferHeight_ <= 0)
+    {
+        return;
+    }
+
     const float aspectRatio = framebufferHeight_ > 0
         ? static_cast<float>(framebufferWidth_) / static_cast<float>(framebufferHeight_)
         : (16.0f / 9.0f);
@@ -698,9 +704,9 @@ void App::ScrollCallback(GLFWwindow* window, double xOffset, double yOffset)
 
 void App::HandleFramebufferSize(int width, int height)
 {
-    framebufferWidth_ = width;
-    framebufferHeight_ = height;
-    glViewport(0, 0, width, height);
+    framebufferWidth_ = std::max(0, width);
+    framebufferHeight_ = std::max(0, height);
+    glViewport(0, 0, std::max(1, width), std::max(1, height));
 }
 
 void App::HandleKey(int key, int scancode, int action, int mods)

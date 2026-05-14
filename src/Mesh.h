@@ -11,6 +11,8 @@ struct Vertex
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 texCoords;
+    glm::ivec4 boneIDs { -1, -1, -1, -1 };
+    glm::vec4 weights { 0.0f };
 };
 
 struct Texture

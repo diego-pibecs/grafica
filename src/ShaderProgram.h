@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include <GL/glew.h>
 #include <glm/glm.hpp>
@@ -25,6 +26,7 @@ public:
     void SetFloat(const std::string& name, float value) const;
     void SetVec3(const std::string& name, const glm::vec3& value) const;
     void SetMat4(const std::string& name, const glm::mat4& value) const;
+    void SetMat4Array(const std::string& name, const std::vector<glm::mat4>& values) const;
 
 private:
     GLuint programId_ = 0;

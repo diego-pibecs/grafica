@@ -73,6 +73,75 @@ glm::vec2 Rotate2D(const glm::vec2& value, float radians)
     return glm::vec2((value.x * c) - (value.y * s), (value.x * s) + (value.y * c));
 }
 
+float NormalizeDegrees(float value)
+{
+    while (value > 180.0f)
+    {
+        value -= 360.0f;
+    }
+    while (value < -180.0f)
+    {
+        value += 360.0f;
+    }
+    return value;
+}
+
+float ApproachAngleDegrees(float current, float target, float maxStep)
+{
+    const float delta = NormalizeDegrees(target - current);
+    return NormalizeDegrees(current + std::clamp(delta, -maxStep, maxStep));
+}
+
+float SmoothStep(float value)
+{
+    const float t = std::clamp(value, 0.0f, 1.0f);
+    return t * t * (3.0f - (2.0f * t));
+}
+
+float LerpAngleShortest(float start, float target, float factor)
+{
+    return NormalizeDegrees(start + (NormalizeDegrees(target - start) * factor));
+}
+
+void StartTurn(TurnAnimation& turn, float targetYaw, float duration)
+{
+    targetYaw = NormalizeDegrees(targetYaw);
+    if (std::abs(NormalizeDegrees(targetYaw - turn.targetYaw)) < 0.5f && turn.active)
+    {
+        return;
+    }
+    if (std::abs(NormalizeDegrees(targetYaw - turn.currentYaw)) < 0.75f)
+    {
+        turn.currentYaw = targetYaw;
+        turn.targetYaw = targetYaw;
+        turn.active = false;
+        return;
+    }
+
+    turn.startYaw = turn.currentYaw;
+    turn.targetYaw = targetYaw;
+    turn.timer = 0.0f;
+    turn.duration = std::max(0.05f, duration);
+    turn.active = true;
+}
+
+void UpdateTurn(TurnAnimation& turn, float deltaTimeSeconds)
+{
+    if (!turn.active)
+    {
+        return;
+    }
+
+    turn.timer += std::max(0.0f, deltaTimeSeconds);
+    const float progress = std::clamp(turn.timer / turn.duration, 0.0f, 1.0f);
+    turn.currentYaw = LerpAngleShortest(turn.startYaw, turn.targetYaw, SmoothStep(progress));
+    if (progress >= 1.0f)
+    {
+        turn.currentYaw = turn.targetYaw;
+        turn.active = false;
+    }
+}
+
 bool RayIntersectsDoorBlocker(
     const glm::vec3& rayOrigin,
     const glm::vec3& rayDirection,
@@ -668,6 +737,8 @@ void BaseScene::Update(const PlayerSnapshot& player, float absoluteTimeSeconds, 
     {
         damageCooldownTimer_ = std::max(0.0f, damageCooldownTimer_ - dt);
     }
+    UpdateKirbyVisualYaw(player, dt);
+    UpdatePatrolActors(dt);
     UpdateParkourGuideLight(player, dt);
     if (gameOverPendingReset_)
     {
@@ -1331,8 +1402,8 @@ std::vector<std::string> BaseScene::BuildCenterMessageLines() const
         {
             return { "NECESITAS MAS PODER", "VIDA PERDIDA" };
         }
-        if (timedMessage_.text == "NO TOQUES AL POLLO"
-            || timedMessage_.text == "NO TOQUES AL MURCIELAGO"
+        if (timedMessage_.text == "NO TOQUES AL ENEMIGO"
+            || timedMessage_.text == "EL MURCIELAGO TE HA GOLPEADO"
             || timedMessage_.text == "WHISPY TE HA GOLPEADO")
         {
             return { "VIDA PERDIDA", timedMessage_.text };
@@ -1368,7 +1439,7 @@ void BaseScene::LoadVegetableValleyDemo()
     playerSpawnPosition_ = glm::vec3(0.0f, 0.0f, 16.0f);
     playerSpawnYawDegrees_ = -90.0f;
     zoneTwoCenter_ = glm::vec3(70.0f, 2.0f, -4.0f);
-    whispyPosition_ = glm::vec3(70.0f, 3.50f, -20.0f);
+    whispyPosition_ = glm::vec3(70.0f, 3.50f, -24.0f);
     portalPosition_ = glm::vec3(0.0f, 1.25f, -15.5f);
     portalPropPosition_ = glm::vec3(2.0f, 1.0f, -13.0f);
     portalTargetPosition_ = glm::vec3(62.0f, 0.25f, 14.0f);
@@ -1376,7 +1447,24 @@ void BaseScene::LoadVegetableValleyDemo()
     parkourStarPosition_ = glm::vec3(70.0f, 4.10f, -13.8f);
     portalTargetYawDegrees_ = -90.0f;
     finalStarBasePosition_ = whispyPosition_ + glm::vec3(0.0f, 1.4f, 4.0f);
+    enemyMushroomPatrolA_ = glm::vec3(-3.0f, 0.0f, 12.3f);
+    enemyMushroomPatrolB_ = glm::vec3(-5.5f, 0.0f, -0.24f);
+    enemyMushroomPosition_ = enemyMushroomPatrolA_;
+    enemyPlantPatrolA_ = glm::vec3(5.6f, 0.0f, 11.5f);
+    enemyPlantPatrolB_ = glm::vec3(8.5f, 0.0f, 1.5f);
+    enemyPlantPosition_ = enemyPlantPatrolA_;
+    enemyMushroomTurn_.currentYaw = glm::degrees(std::atan2((enemyMushroomPatrolB_ - enemyMushroomPatrolA_).z, (enemyMushroomPatrolB_ - enemyMushroomPatrolA_).x));
+    enemyPlantTurn_.currentYaw = glm::degrees(std::atan2((enemyPlantPatrolB_ - enemyPlantPatrolA_).z, (enemyPlantPatrolB_ - enemyPlantPatrolA_).x));
+    batBasePosition_ = glm::vec3(68.8f, 3.2f, 2.4f);
+    batPosition_ = batBasePosition_;
+    batPatrolOffsetX_ = 0.0f;
+    batPatrolDirection_ = 1;
+    kirbyVisualYawDegrees_ = playerSpawnYawDegrees_;
+    kirbyTurn_.currentYaw = kirbyVisualYawDegrees_;
+    batTurn_.currentYaw = -32.0f;
     activeModelLabel_ = "Kirby Vegetable Valley P1";
+    Model::InspectAssimpScene(assetsRoot_ / "models" / "enemigos" / "hongo.fbx");
+    Model::InspectAssimpScene(assetsRoot_ / "models" / "enemigos" / "planta.fbx");
 
     const glm::vec3 zoneOneCenter = (zoneOneBoundsMin_ + zoneOneBoundsMax_) * 0.5f;
     AddSolidCollider(glm::vec3(zoneOneCenter.x, -0.05f, zoneOneCenter.z), glm::vec3(floorHalfExtents_.x, 0.05f, floorHalfExtents_.y));
@@ -1408,6 +1496,10 @@ void BaseScene::LoadVegetableValleyDemo()
         true,
         true);
     kirbyPlacement_ = std::move(kirbyEntity.placement);
+    if (forceProceduralKirbyAnimation_)
+    {
+        DebugLog::Info("ANIM", "Kirby skeletal runtime disabled: FBX skinning deforms this asset; using procedural visual animation fallback.");
+    }
 
     whispyFbxLoadAttempted_ = true;
     SceneEntity whispyEntity;
@@ -1461,7 +1553,8 @@ void BaseScene::LoadVegetableValleyDemo()
         { "nature-grass-b", assetsRoot_ / "models" / "nature" / "grass_02.fbx", glm::vec3(7.2f, 0.0f, -2.2f), -14.0f, 0.85f, true, false },
         { "nature-mushrooms", assetsRoot_ / "models" / "nature" / "mushrooms.fbx", glm::vec3(-8.4f, 0.0f, 3.8f), 27.0f, 0.48f, true, false },
         { "nature-fallen-tree", assetsRoot_ / "models" / "nature" / "fallen_tree.fbx", glm::vec3(3.69f, 0.0f, 0.74f), -22.0f, 2.15f, false, true },
-        { "zone-one-black-chick", assetsRoot_ / "models" / "Black_Chick" / "Low_poly" / "Chick_low.fbx", chickenPosition_, 34.0f, 1.0f, true, false },
+        { "zone-one-enemy-hongo", assetsRoot_ / "models" / "enemigos" / "hongo.fbx", enemyMushroomPosition_, enemyMushroomTurn_.currentYaw, 1.15f, true, false },
+        { "zone-one-enemy-planta", assetsRoot_ / "models" / "enemigos" / "planta.fbx", enemyPlantPosition_, enemyPlantTurn_.currentYaw, 1.25f, true, false },
         { "zone-two-bat", assetsRoot_ / "models" / "animated-halloween-bat" / "source" / "Sketchfab_2023_10_26_02_42_48.fbx", batPosition_, -32.0f, 1.25f, true, false },
         { "portal-dummy-star", assetsRoot_ / "models" / "nuevos" / "star.obj", portalPropPosition_, 0.0f, 0.9f, false, false }
     };
@@ -1870,7 +1963,7 @@ void BaseScene::ConfigureSceneLights()
     parkourGuideLightTarget_ = parkourGuideLightPosition_;
     parkourGuideLightInitialized_ = false;
     addPointLight("parkour-guide", parkourGuideLightPosition_, glm::vec3(1.0f, 0.78f, 0.36f), 0.0f, 7.4f, SceneZone::Parkour, true);
-    addPointLight("whispy-summit", glm::vec3(70.0f, 5.1f, -15.5f), glm::vec3(1.0f, 0.76f, 0.35f), 3.0f, 9.0f, SceneZone::Whispy);
+    addPointLight("whispy-summit", whispyPosition_ + glm::vec3(0.0f, 1.6f, 4.5f), glm::vec3(1.0f, 0.76f, 0.35f), 3.0f, 9.0f, SceneZone::Whispy);
 
     const std::size_t shadowCastingPointLights = static_cast<std::size_t>(std::count_if(
         pointLights_.begin(),
@@ -2158,18 +2251,20 @@ void BaseScene::UpdateContactDamage(const PlayerSnapshot& player)
     }
 
     const glm::vec2 playerXZ(player.position.x, player.position.z);
-    if (currentZone_ == SceneZone::Entrance
-        && glm::length(playerXZ - glm::vec2(chickenPosition_.x, chickenPosition_.z)) < 1.35f
-        && std::abs(player.position.y - chickenPosition_.y) < 1.8f)
+    const bool touchedMushroom = glm::length(playerXZ - glm::vec2(enemyMushroomPosition_.x, enemyMushroomPosition_.z)) < 1.25f
+        && std::abs(player.position.y - enemyMushroomPosition_.y) < 1.8f;
+    const bool touchedPlant = glm::length(playerXZ - glm::vec2(enemyPlantPosition_.x, enemyPlantPosition_.z)) < 1.35f
+        && std::abs(player.position.y - enemyPlantPosition_.y) < 1.8f;
+    if (currentZone_ == SceneZone::Entrance && (touchedMushroom || touchedPlant))
     {
-        ApplyPlayerDamage("NO TOQUES AL POLLO", true);
+        ApplyPlayerDamage("NO TOQUES AL ENEMIGO", true);
         return;
     }
 
     if (player.position.x > 48.0f
         && glm::length(player.position - batPosition_) < 1.65f)
     {
-        ApplyPlayerDamage("NO TOQUES AL MURCIELAGO", true);
+        ApplyPlayerDamage("EL MURCIELAGO TE HA GOLPEADO", true);
         return;
     }
 
@@ -2319,6 +2414,108 @@ void BaseScene::UpdateParkourGuideLight(const PlayerSnapshot& player, float delt
     guideLight->color = glm::vec3(1.0f, 0.78f, 0.36f);
 }
 
+void BaseScene::UpdatePatrolActors(float deltaTimeSeconds)
+{
+    const float dt = std::clamp(deltaTimeSeconds, 0.0f, 0.1f);
+    auto syncEntity = [&](const std::string& name, const glm::vec3& position, float yawDegrees)
+    {
+        for (SceneEntity& entity : entities_)
+        {
+            if (entity.name == name)
+            {
+                entity.worldPosition = position;
+                entity.worldYawDegrees = yawDegrees;
+                return;
+            }
+        }
+    };
+
+    auto updateGroundPatrol = [&](glm::vec3& position, const glm::vec3& pointA, const glm::vec3& pointB, int& directionSign, float speed, TurnAnimation& turn, const std::string& entityName)
+    {
+        const glm::vec3 target = directionSign > 0 ? pointB : pointA;
+        glm::vec3 delta = target - position;
+        delta.y = 0.0f;
+        const float distance = glm::length(delta);
+        if (distance > 0.001f)
+        {
+            const glm::vec3 direction = delta / distance;
+            const float targetYaw = glm::degrees(std::atan2(direction.z, direction.x));
+            if (std::abs(NormalizeDegrees(targetYaw - turn.targetYaw)) > 1.0f)
+            {
+                StartTurn(turn, targetYaw, 0.42f);
+            }
+            const float step = std::min(distance, speed * dt);
+            position += direction * step;
+        }
+        if (distance < 0.18f)
+        {
+            directionSign *= -1;
+        }
+        UpdateTurn(turn, dt);
+        position.y = 0.0f;
+        syncEntity(entityName, position, turn.currentYaw);
+    };
+
+    updateGroundPatrol(
+        enemyMushroomPosition_,
+        enemyMushroomPatrolA_,
+        enemyMushroomPatrolB_,
+        enemyMushroomPatrolDirection_,
+        enemyMushroomPatrolSpeed_,
+        enemyMushroomTurn_,
+        "zone-one-enemy-hongo");
+    updateGroundPatrol(
+        enemyPlantPosition_,
+        enemyPlantPatrolA_,
+        enemyPlantPatrolB_,
+        enemyPlantPatrolDirection_,
+        enemyPlantPatrolSpeed_,
+        enemyPlantTurn_,
+        "zone-one-enemy-planta");
+
+    if (!batTurn_.active)
+    {
+        const float desiredBatYaw = batPatrolDirection_ > 0 ? -32.0f : 148.0f;
+        if (std::abs(NormalizeDegrees(desiredBatYaw - batTurn_.currentYaw)) > 1.0f)
+        {
+            StartTurn(batTurn_, desiredBatYaw, 0.55f);
+        }
+    }
+
+    const float turnSlowdown = batTurn_.active ? 0.25f : 1.0f;
+    batPatrolOffsetX_ += static_cast<float>(batPatrolDirection_) * batPatrolSpeed_ * dt * turnSlowdown;
+    if (batPatrolOffsetX_ > 3.0f)
+    {
+        batPatrolOffsetX_ = 3.0f;
+        batPatrolDirection_ = -1;
+        StartTurn(batTurn_, 148.0f, 0.55f);
+    }
+    else if (batPatrolOffsetX_ < -3.0f)
+    {
+        batPatrolOffsetX_ = -3.0f;
+        batPatrolDirection_ = 1;
+        StartTurn(batTurn_, -32.0f, 0.55f);
+    }
+    UpdateTurn(batTurn_, dt);
+    batPosition_ = batBasePosition_ + glm::vec3(batPatrolOffsetX_, std::sin(absoluteTimeSeconds_ * 2.2f) * 0.18f, 0.0f);
+    syncEntity("zone-two-bat", batPosition_, batTurn_.currentYaw);
+}
+
+void BaseScene::UpdateKirbyVisualYaw(const PlayerSnapshot& player, float deltaTimeSeconds)
+{
+    const glm::vec2 horizontalVelocity(player.velocity.x, player.velocity.z);
+    if (glm::length(horizontalVelocity) >= 0.08f)
+    {
+        const float targetYaw = glm::degrees(std::atan2(horizontalVelocity.y, horizontalVelocity.x));
+        if (std::abs(NormalizeDegrees(targetYaw - kirbyTurn_.targetYaw)) > 1.0f)
+        {
+            StartTurn(kirbyTurn_, targetYaw, 0.35f);
+        }
+    }
+    UpdateTurn(kirbyTurn_, std::clamp(deltaTimeSeconds, 0.0f, 0.1f));
+    kirbyVisualYawDegrees_ = kirbyTurn_.currentYaw;
+}
+
 void BaseScene::ResetGameState(bool resetLives)
 {
     stars_ = 0;
@@ -2335,6 +2532,26 @@ void BaseScene::ResetGameState(bool resetLives)
     gameOverStartTime_ = -100.0f;
     damageFlashTimer_ = 0.0f;
     damageCooldownTimer_ = 0.0f;
+    enemyMushroomPosition_ = enemyMushroomPatrolA_;
+    enemyPlantPosition_ = enemyPlantPatrolA_;
+    enemyMushroomPatrolDirection_ = 1;
+    enemyPlantPatrolDirection_ = 1;
+    enemyMushroomTurn_.currentYaw = glm::degrees(std::atan2((enemyMushroomPatrolB_ - enemyMushroomPatrolA_).z, (enemyMushroomPatrolB_ - enemyMushroomPatrolA_).x));
+    enemyMushroomTurn_.targetYaw = enemyMushroomTurn_.currentYaw;
+    enemyMushroomTurn_.active = false;
+    enemyPlantTurn_.currentYaw = glm::degrees(std::atan2((enemyPlantPatrolB_ - enemyPlantPatrolA_).z, (enemyPlantPatrolB_ - enemyPlantPatrolA_).x));
+    enemyPlantTurn_.targetYaw = enemyPlantTurn_.currentYaw;
+    enemyPlantTurn_.active = false;
+    batPatrolOffsetX_ = 0.0f;
+    batPatrolDirection_ = 1;
+    batPosition_ = batBasePosition_;
+    batTurn_.currentYaw = -32.0f;
+    batTurn_.targetYaw = -32.0f;
+    batTurn_.active = false;
+    kirbyVisualYawDegrees_ = playerSpawnYawDegrees_;
+    kirbyTurn_.currentYaw = kirbyVisualYawDegrees_;
+    kirbyTurn_.targetYaw = kirbyVisualYawDegrees_;
+    kirbyTurn_.active = false;
     parkourGuideLightInitialized_ = false;
     lastParkourGuideSurface_.clear();
     finalZoneActivated_ = false;
@@ -2406,10 +2623,10 @@ glm::mat4 BaseScene::BuildStaticModelMatrix(const SceneEntity& entity) const
         extraYawDegrees = std::sin(absoluteTimeSeconds_ * 1.7f) * 5.0f;
         extraRollDegrees = std::sin(absoluteTimeSeconds_ * 3.2f) * 3.5f;
     }
-    else if (lowerName == "zone-one-black-chick")
+    else if (lowerName == "zone-one-enemy-hongo" || lowerName == "zone-one-enemy-planta")
     {
         position.y += std::sin(absoluteTimeSeconds_ * 3.4f) * 0.035f;
-        extraYawDegrees = std::sin(absoluteTimeSeconds_ * 1.3f) * 4.0f;
+        extraRollDegrees = std::sin(absoluteTimeSeconds_ * 5.0f) * 2.0f;
     }
 
     glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
@@ -2478,7 +2695,7 @@ glm::mat4 BaseScene::BuildKirbyModelMatrix() const
     }
 
     glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
-    model = glm::rotate(model, glm::radians(latestPlayer_.facingYawDegrees + kirbyPlacement_.yawOffsetDegrees + extraYawDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(kirbyVisualYawDegrees_ + kirbyPlacement_.yawOffsetDegrees + extraYawDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
     if (std::abs(extraRollDegrees) > 0.001f)
     {
         model = glm::rotate(model, glm::radians(extraRollDegrees), glm::vec3(0.0f, 0.0f, 1.0f));
@@ -2990,6 +3207,7 @@ void BaseScene::DrawColoredMesh(
     litShader_->SetFloat("specularStrength", specularStrength);
     litShader_->SetFloat("unlitFactor", unlitFactor);
     litShader_->SetFloat("pointLightResponse", pointLightResponse);
+    litShader_->SetBool("useSkinning", false);
     litShader_->SetVec3("baseColor", color);
     litShader_->SetMat4("model", model);
     glActiveTexture(GL_TEXTURE0);
@@ -3067,18 +3285,50 @@ void BaseScene::DrawKirby() const
 
     if (kirbyPlacement_.model != nullptr)
     {
+        std::string preferredClip = "Idle";
+        if (latestPlayer_.horizontalSpeed > 0.15f)
+        {
+            preferredClip = latestPlayer_.sprinting ? "Run" : "Walk";
+        }
+        kirbySkeletalAnimationThisFrame_ = !forceProceduralKirbyAnimation_ && kirbyPlacement_.model->ApplyAnimation(preferredClip, absoluteTimeSeconds_);
+        litShader_->SetBool("useSkinning", kirbySkeletalAnimationThisFrame_);
+        if (kirbySkeletalAnimationThisFrame_)
+        {
+            kirbyPlacement_.model->UploadBoneMatrices(*litShader_);
+        }
         litShader_->SetBool("useTexture", kirbyPlacement_.model->HasTextures());
         litShader_->SetFloat("specularStrength", 0.04f);
         litShader_->SetFloat("unlitFactor", 0.12f);
         litShader_->SetFloat("pointLightResponse", 0.8f);
         litShader_->SetVec3("baseColor", glm::vec3(1.0f, 0.52f, 0.66f));
-        litShader_->SetMat4("model", BuildKirbyModelMatrix());
+        const glm::mat4 kirbyModelMatrix = BuildKirbyModelMatrix();
+        if (!kirbyDrawDiagnosticLogged_)
+        {
+            DebugLog::Info(
+                "KIRBY",
+                "draw called=true useSkinning=", kirbySkeletalAnimationThisFrame_,
+                " loaded=", kirbyPlacement_.model->IsLoaded(),
+                " hasTextures=", kirbyPlacement_.model->HasTextures(),
+                " scale=", kirbyPlacement_.scale,
+                " position=(",
+                latestPlayer_.position.x, ", ",
+                latestPlayer_.position.y, ", ",
+                latestPlayer_.position.z, ")",
+                " modelTranslation=(",
+                kirbyModelMatrix[3][0], ", ",
+                kirbyModelMatrix[3][1], ", ",
+                kirbyModelMatrix[3][2], ")");
+            kirbyDrawDiagnosticLogged_ = true;
+        }
+        litShader_->SetMat4("model", kirbyModelMatrix);
         if (!kirbyPlacement_.model->HasTextures())
         {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, dirtTexture_);
         }
         kirbyPlacement_.model->Draw();
+        litShader_->SetBool("useSkinning", false);
+        kirbySkeletalAnimationThisFrame_ = false;
         return;
     }
 
@@ -3178,6 +3428,7 @@ void BaseScene::DrawLitGeometry() const
     litShader_->SetFloat("specularStrength", 0.0f);
     litShader_->SetFloat("pointLightResponse", 0.2f);
     litShader_->SetFloat("unlitFactor", 0.0f);
+    litShader_->SetBool("useSkinning", false);
     litShader_->SetVec3("baseColor", glm::vec3(1.0f));
     litShader_->SetMat4("model", glm::mat4(1.0f));
     if (!zoneTwoViewThisFrame_)
@@ -3250,6 +3501,34 @@ void BaseScene::DrawLitGeometry() const
             continue;
         }
 
+        bool useSkinning = false;
+        const std::string lowerEntityName = ToLowerAscii(entity.name);
+        if (lowerEntityName == "zone-two-bat")
+        {
+            useSkinning = entity.placement.model->ApplyAnimation("Flying", absoluteTimeSeconds_);
+            if (!useSkinning)
+            {
+                useSkinning = entity.placement.model->ApplyAnimation("Rest", absoluteTimeSeconds_);
+            }
+            if (!useSkinning)
+            {
+                useSkinning = entity.placement.model->ApplyAnimation("Sleeping", absoluteTimeSeconds_);
+            }
+        }
+        else if (lowerEntityName == "zone-one-enemy-hongo" || lowerEntityName == "zone-one-enemy-planta")
+        {
+            useSkinning = entity.placement.model->ApplyAnimation("idleblob", absoluteTimeSeconds_);
+            if (!useSkinning)
+            {
+                useSkinning = entity.placement.model->ApplyAnimation("Idle", absoluteTimeSeconds_);
+            }
+        }
+        litShader_->SetBool("useSkinning", useSkinning);
+        if (useSkinning)
+        {
+            entity.placement.model->UploadBoneMatrices(*litShader_);
+        }
+
         const bool useEntityTexture = UseTextureForEntity(entity.name, entity.placement.model->HasTextures());
         litShader_->SetBool("useTexture", useEntityTexture);
         litShader_->SetFloat("specularStrength", SpecularStrengthForEntity(entity.name));
@@ -3263,10 +3542,12 @@ void BaseScene::DrawLitGeometry() const
             glBindTexture(GL_TEXTURE_2D, dirtTexture_);
         }
         entity.placement.model->Draw();
+        litShader_->SetBool("useSkinning", false);
     }
 
     if (whispyState_ != WhispyState::Defeated && whispyFbxPreviewEnabled_ && whispyFbxPlacement_.model != nullptr)
     {
+        litShader_->SetBool("useSkinning", false);
         litShader_->SetBool("useTexture", whispyFbxPlacement_.model->HasTextures());
         litShader_->SetFloat("specularStrength", 0.03f);
         litShader_->SetFloat("unlitFactor", 0.0f);
@@ -3310,6 +3591,7 @@ void BaseScene::DrawLitGeometry() const
             continue;
         }
 
+        litShader_->SetBool("useSkinning", false);
         litShader_->SetBool("useTexture", door.placement.model->HasTextures());
         litShader_->SetFloat("specularStrength", 0.03f);
         litShader_->SetFloat("unlitFactor", 0.0f);

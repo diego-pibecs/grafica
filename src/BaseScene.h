@@ -25,6 +25,16 @@ struct SceneCollisionSource
     glm::mat4 transform { 1.0f };
 };
 
+struct TurnAnimation
+{
+    float currentYaw = 0.0f;
+    float targetYaw = 0.0f;
+    float startYaw = 0.0f;
+    float timer = 0.0f;
+    float duration = 0.45f;
+    bool active = false;
+};
+
 class BaseScene
 {
 public:
@@ -209,12 +219,32 @@ private:
     glm::vec3 parkourStarPosition_ { 70.0f, 4.10f, -13.8f };
     glm::vec3 parkourGuideLightPosition_ { 65.0f, 2.45f, 8.8f };
     glm::vec3 parkourGuideLightTarget_ { 65.0f, 2.45f, 8.8f };
-    glm::vec3 chickenPosition_ { -4.8f, 0.0f, 10.8f };
+    glm::vec3 enemyMushroomPosition_ { -3.0f, 0.0f, 12.3f };
+    glm::vec3 enemyMushroomPatrolA_ { -3.0f, 0.0f, 12.3f };
+    glm::vec3 enemyMushroomPatrolB_ { -5.5f, 0.0f, -0.24f };
+    glm::vec3 enemyPlantPosition_ { 5.6f, 0.0f, 11.5f };
+    glm::vec3 enemyPlantPatrolA_ { 5.6f, 0.0f, 11.5f };
+    glm::vec3 enemyPlantPatrolB_ { 8.5f, 0.0f, 1.5f };
     glm::vec3 batPosition_ { 68.8f, 3.2f, 2.4f };
+    glm::vec3 batBasePosition_ { 68.8f, 3.2f, 2.4f };
     float playerSpawnYawDegrees_ = -90.0f;
     float portalTargetYawDegrees_ = -90.0f;
     float pendingTeleportYawDegrees_ = -90.0f;
     float signTextYawDegrees_ = 180.0f;
+    float enemyMushroomPatrolSpeed_ = 1.15f;
+    float enemyPlantPatrolSpeed_ = 0.95f;
+    int enemyMushroomPatrolDirection_ = 1;
+    int enemyPlantPatrolDirection_ = 1;
+    float batPatrolOffsetX_ = 0.0f;
+    float batPatrolSpeed_ = 1.35f;
+    int batPatrolDirection_ = 1;
+    float kirbyVisualYawDegrees_ = -90.0f;
+    float kirbyTurnSpeed_ = 8.5f;
+    bool forceProceduralKirbyAnimation_ = true;
+    TurnAnimation kirbyTurn_;
+    TurnAnimation enemyMushroomTurn_;
+    TurnAnimation enemyPlantTurn_;
+    TurnAnimation batTurn_;
     GLuint dirtTexture_ = 0;
     GLuint skyCloudTextureA_ = 0;
     GLuint skyCloudTextureB_ = 0;
@@ -278,6 +308,8 @@ private:
     mutable bool shadowMapDirty_ = true;
     mutable bool pointShadowMapsDirty_ = true;
     mutable bool renderKirbyThisFrame_ = false;
+    mutable bool kirbySkeletalAnimationThisFrame_ = false;
+    mutable bool kirbyDrawDiagnosticLogged_ = false;
     mutable bool zoneTwoViewThisFrame_ = false;
     mutable RenderPerfStats renderPerfStats_;
 
@@ -325,6 +357,8 @@ private:
     bool ApplyPlayerDamage(const std::string& message, bool preserveProgress);
     void UpdateContactDamage(const PlayerSnapshot& player);
     void UpdateParkourGuideLight(const PlayerSnapshot& player, float deltaTimeSeconds);
+    void UpdatePatrolActors(float deltaTimeSeconds);
+    void UpdateKirbyVisualYaw(const PlayerSnapshot& player, float deltaTimeSeconds);
     void ResetGameState(bool resetLives);
     [[nodiscard]] bool FindZoneTwoSurfaceGuidePosition(const std::string& surfaceName, glm::vec3& position) const;
     void RenderShadowMap(const glm::mat4& lightSpaceMatrix) const;
