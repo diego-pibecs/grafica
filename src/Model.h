@@ -59,6 +59,8 @@ private:
     std::size_t sourceTriangleCount_ = 0;
     std::size_t removedDuplicateTriangleCount_ = 0;
     std::size_t removedDegenerateTriangleCount_ = 0;
+    std::size_t animationCount_ = 0;
+    std::size_t boneCount_ = 0;
 
     struct QuantizedTriangleKeyHash
     {

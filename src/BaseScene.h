@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include "CameraController.h"
 #include "Mesh.h"
 #include "Model.h"
 #include "PlayerController.h"
@@ -15,8 +16,6 @@
 #include "navigation/IWalkableWorld.h"
 #include "physics/core/PhysicsTypes.h"
 #include "render/debug/PhysicsDebugRenderer.h"
-
-class CameraController;
 
 struct SceneCollisionSource
 {
@@ -52,8 +51,29 @@ public:
     [[nodiscard]] const std::vector<SceneCollisionSource>& GetStaticCollisionSources() const noexcept;
     [[nodiscard]] StaticRegionDesc BuildFloorCollisionRegion() const;
     [[nodiscard]] std::vector<WalkableBlocker> BuildWalkableBlockers() const;
+    [[nodiscard]] std::vector<PlayerWalkableSurface> BuildZoneTwoWalkableSurfaces() const;
+    [[nodiscard]] std::vector<CameraSolidCollider> BuildCameraSolidColliders() const;
+    [[nodiscard]] std::vector<std::string> BuildHudLines() const;
+    [[nodiscard]] std::vector<std::string> BuildInstructionLines() const;
+    [[nodiscard]] std::vector<std::string> BuildContextMessageLines() const;
+    [[nodiscard]] std::vector<std::string> BuildCenterMessageLines() const;
+    [[nodiscard]] float GetDamageFlashAlpha() const noexcept;
 
 private:
+    enum class SceneZone
+    {
+        Entrance = 1,
+        Parkour = 2,
+        Whispy = 3
+    };
+
+    enum class WhispyState
+    {
+        Idle,
+        Defeating,
+        Defeated
+    };
+
     struct ModelPlacement
     {
         std::filesystem::path sourcePath;
@@ -88,6 +108,20 @@ private:
         glm::vec3 color { 0.5f };
     };
 
+    struct CollectibleStar
+    {
+        std::string entityName;
+        glm::vec3 position { 0.0f };
+        bool collected = false;
+    };
+
+    struct TimedMessage
+    {
+        std::string text;
+        float remainingTime = 0.0f;
+        int priority = 0;
+    };
+
     enum class DoorMotionType
     {
         Swing,
@@ -120,6 +154,8 @@ private:
         glm::vec3 color { 1.0f };
         float intensity = 1.0f;
         float range = 8.0f;
+        SceneZone ownerZone = SceneZone::Entrance;
+        bool visibleAcrossZones = false;
         bool castsShadow = false;
         GLuint shadowCubeMap = 0;
     };
@@ -164,11 +200,17 @@ private:
     glm::vec3 playerSpawnPosition_ { 0.0f, 0.0f, 16.0f };
     glm::vec3 whispyPosition_ { 70.0f, 3.5f, -20.0f };
     glm::vec3 portalPosition_ { 0.0f, 1.25f, -15.5f };
-    glm::vec3 portalPropPosition_ { 0.0f, 1.0f, -13.4f };
+    glm::vec3 portalPropPosition_ { 2.0f, 1.0f, -13.0f };
     glm::vec3 portalTargetPosition_ { 62.0f, 0.25f, 14.0f };
     glm::vec3 pendingTeleportPosition_ { 0.0f };
     glm::vec3 finalStarBasePosition_ { 0.0f, 1.4f, -22.5f };
     glm::vec3 signTextPosition_ { -1.8f, 1.05f, 18.5f };
+    glm::vec3 hiddenStarPosition_ { 11.2f, 1.0f, 13.4f };
+    glm::vec3 parkourStarPosition_ { 70.0f, 4.10f, -13.8f };
+    glm::vec3 parkourGuideLightPosition_ { 65.0f, 2.45f, 8.8f };
+    glm::vec3 parkourGuideLightTarget_ { 65.0f, 2.45f, 8.8f };
+    glm::vec3 chickenPosition_ { -4.8f, 0.0f, 10.8f };
+    glm::vec3 batPosition_ { 68.8f, 3.2f, 2.4f };
     float playerSpawnYawDegrees_ = -90.0f;
     float portalTargetYawDegrees_ = -90.0f;
     float pendingTeleportYawDegrees_ = -90.0f;
@@ -183,6 +225,9 @@ private:
     std::vector<PointLight> pointLights_;
     std::vector<WalkableBlocker> sceneBlockers_;
     std::vector<PrimitivePlatform> platforms_;
+    std::vector<PlayerWalkableSurface> zoneTwoWalkableSurfaces_;
+    std::vector<CameraSolidCollider> solidColliders_;
+    std::vector<CollectibleStar> collectibleStars_;
     std::vector<SceneCollisionSource> staticCollisionSources_;
     PhysicsDebugFrame physicsDebugFrame_;
     PlayerSnapshot latestPlayer_;
@@ -191,6 +236,14 @@ private:
     float portalKeyframeStartTime_ = -100.0f;
     float appleKeyframeStartTime_ = -100.0f;
     float finalActivationTime_ = -100.0f;
+    float lastFallRespawnTime_ = -100.0f;
+    TimedMessage timedMessage_;
+    std::string contextMessage_;
+    std::string lastParkourGuideSurface_;
+    SceneZone currentZone_ = SceneZone::Entrance;
+    SceneZone previousZone_ = SceneZone::Entrance;
+    int stars_ = 0;
+    int lives_ = 3;
     bool physicsDebugEnabled_ = false;
     bool kirbyKeyframeActive_ = false;
     bool portalKeyframeActive_ = false;
@@ -199,11 +252,21 @@ private:
     bool portalTeleportConsumed_ = false;
     bool appleKeyframeActive_ = false;
     bool finalZoneActivated_ = false;
+    bool portalStarCollected_ = false;
+    bool portalActivated_ = false;
+    bool gameOverPendingReset_ = false;
     bool whispyFbxPreviewEnabled_ = false;
     bool whispyFbxLoadAttempted_ = false;
     bool whispyFbxLoadFailed_ = false;
     glm::vec2 floorHalfExtents_ { 13.5f, 21.0f };
     glm::vec2 floorUvTiling_ { 9.0f, 14.0f };
+    float gameOverStartTime_ = -100.0f;
+    float damageFlashTimer_ = 0.0f;
+    float damageFlashDuration_ = 0.85f;
+    float damageCooldownTimer_ = 0.0f;
+    float whispyDefeatStartTime_ = -100.0f;
+    float whispyDefeatDuration_ = 2.4f;
+    bool parkourGuideLightInitialized_ = false;
     float boundaryWallHeight_ = 5.5f;
     float boundaryWallThickness_ = 0.70f;
     GLuint shadowMapFramebuffer_ = 0;
@@ -234,6 +297,9 @@ private:
     void RegisterStaticCollisionSource(const SceneEntity& entity);
     void AddSceneBlocker(const std::string& name, const glm::vec3& center, const glm::vec3& halfExtents, float yawDegrees = 0.0f);
     void AddPrimitivePlatform(const std::string& name, const glm::vec3& center, const glm::vec3& size, const glm::vec3& color);
+    void AddZoneTwoWalkableSurface(const std::string& name, const glm::vec3& center, const glm::vec3& halfExtents);
+    void AddSolidCollider(const glm::vec3& center, const glm::vec3& halfExtents);
+    void AddCollectibleStar(const std::string& entityName, const glm::vec3& position);
     void SetupPlacement(
         SceneEntity& entity,
         const std::filesystem::path& path,
@@ -248,6 +314,19 @@ private:
     [[nodiscard]] WalkableBlocker BuildDoorBlocker(const InteractiveDoor& door) const;
     [[nodiscard]] glm::mat4 BuildSunLightSpaceMatrix() const;
     [[nodiscard]] glm::vec3 ComputeStreetLightAnchor(const SceneEntity& entity) const;
+    [[nodiscard]] SceneZone DetermineZone(const glm::vec3& position) const;
+    [[nodiscard]] const CollectibleStar* FindCollectibleStar(const std::string& entityName) const;
+    [[nodiscard]] CollectibleStar* FindCollectibleStar(const std::string& entityName);
+    [[nodiscard]] bool IsCollectibleVisible(const std::string& entityName) const;
+    void ShowTimedMessage(const std::string& text, float seconds, int priority);
+    void RebuildContextMessage(const PlayerSnapshot& player);
+    void HandleZoneTwoFall();
+    void TriggerDamageFlash();
+    bool ApplyPlayerDamage(const std::string& message, bool preserveProgress);
+    void UpdateContactDamage(const PlayerSnapshot& player);
+    void UpdateParkourGuideLight(const PlayerSnapshot& player, float deltaTimeSeconds);
+    void ResetGameState(bool resetLives);
+    [[nodiscard]] bool FindZoneTwoSurfaceGuidePosition(const std::string& surfaceName, glm::vec3& position) const;
     void RenderShadowMap(const glm::mat4& lightSpaceMatrix) const;
     void RenderPointShadowMaps() const;
     void AllocatePointLightShadowMaps();
@@ -264,6 +343,9 @@ private:
     [[nodiscard]] KeyframeSample SampleKirbyEntranceKeyframes(float elapsedSeconds) const;
     [[nodiscard]] KeyframeSample SamplePortalKeyframes(float elapsedSeconds) const;
     [[nodiscard]] KeyframeSample SampleAppleFallKeyframes(float elapsedSeconds) const;
+    [[nodiscard]] float WhispyDefeatProgress() const noexcept;
+
+    WhispyState whispyState_ = WhispyState::Idle;
 
     static Mesh CreateFloorMesh(GLuint textureId, const glm::vec2& halfExtents, const glm::vec2& uvTiling);
     static Mesh CreateTexturedBoxMesh(

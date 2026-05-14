@@ -173,27 +173,70 @@ void DebugOverlayRenderer::UploadVertices(const std::vector<OverlayVertex>& vert
 
 void DebugOverlayRenderer::Render(const std::vector<std::string>& lines, int framebufferWidth, int framebufferHeight) const
 {
+    RenderAt(lines, framebufferWidth, framebufferHeight, glm::vec2(18.0f, 18.0f), 3.0f, glm::vec3(0.86f, 1.0f, 0.76f), 0.62f);
+}
+
+void DebugOverlayRenderer::RenderFullscreenTint(int framebufferWidth, int framebufferHeight, glm::vec3 color, float alpha) const
+{
+    if (framebufferWidth <= 0 || framebufferHeight <= 0 || alpha <= 0.0f)
+    {
+        return;
+    }
+
+    shader_.Use();
+    shader_.SetMat4("view", glm::mat4(1.0f));
+    shader_.SetMat4(
+        "projection",
+        glm::ortho(0.0f, static_cast<float>(framebufferWidth), static_cast<float>(framebufferHeight), 0.0f));
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(vao_);
+
+    std::vector<OverlayVertex> vertices;
+    vertices.reserve(6);
+    AddQuad(vertices, 0.0f, 0.0f, static_cast<float>(framebufferWidth), static_cast<float>(framebufferHeight), color);
+    UploadVertices(vertices);
+    shader_.SetFloat("alpha", alpha);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void DebugOverlayRenderer::RenderAt(
+    const std::vector<std::string>& lines,
+    int framebufferWidth,
+    int framebufferHeight,
+    glm::vec2 topLeft,
+    float pixelSize,
+    glm::vec3 textColor,
+    float backgroundAlpha,
+    bool centerX) const
+{
     if (lines.empty() || framebufferWidth <= 0 || framebufferHeight <= 0)
     {
         return;
     }
 
-    constexpr float kPixelSize = 3.0f;
-    constexpr float kLineHeight = 28.0f;
-    constexpr float kLeft = 18.0f;
-    constexpr float kTop = 18.0f;
+    const float lineHeight = std::max(18.0f, pixelSize * 9.4f);
     constexpr float kPadding = 10.0f;
-    const glm::vec3 textColor(0.86f, 1.0f, 0.76f);
     const glm::vec3 backgroundColor(0.01f, 0.015f, 0.02f);
-
     float maxLineWidth = 0.0f;
     for (const std::string& line : lines)
     {
-        maxLineWidth = std::max(maxLineWidth, TextWidth(line, kPixelSize));
+        maxLineWidth = std::max(maxLineWidth, TextWidth(line, pixelSize));
+    }
+
+    if (centerX)
+    {
+        topLeft.x = (static_cast<float>(framebufferWidth) - maxLineWidth) * 0.5f;
     }
 
     const float backgroundWidth = maxLineWidth + (kPadding * 2.0f);
-    const float backgroundHeight = (static_cast<float>(lines.size()) * kLineHeight) + (kPadding * 2.0f) - 6.0f;
+    const float backgroundHeight = (static_cast<float>(lines.size()) * lineHeight) + (kPadding * 2.0f) - 6.0f;
 
     shader_.Use();
     shader_.SetMat4("view", glm::mat4(1.0f));
@@ -208,20 +251,23 @@ void DebugOverlayRenderer::Render(const std::vector<std::string>& lines, int fra
 
     std::vector<OverlayVertex> backgroundVertices;
     backgroundVertices.reserve(6);
-    AddQuad(backgroundVertices, kLeft - kPadding, kTop - kPadding, backgroundWidth, backgroundHeight, backgroundColor);
+    AddQuad(backgroundVertices, topLeft.x - kPadding, topLeft.y - kPadding, backgroundWidth, backgroundHeight, backgroundColor);
     UploadVertices(backgroundVertices);
-    shader_.SetFloat("alpha", 0.62f);
+    shader_.SetFloat("alpha", backgroundAlpha);
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(backgroundVertices.size()));
 
     std::vector<OverlayVertex> textVertices;
     for (std::size_t index = 0; index < lines.size(); ++index)
     {
+        const float lineX = centerX
+            ? (static_cast<float>(framebufferWidth) - TextWidth(lines[index], pixelSize)) * 0.5f
+            : topLeft.x;
         AddText(
             textVertices,
             lines[index],
-            kLeft,
-            kTop + (static_cast<float>(index) * kLineHeight),
-            kPixelSize,
+            lineX,
+            topLeft.y + (static_cast<float>(index) * lineHeight),
+            pixelSize,
             textColor);
     }
 

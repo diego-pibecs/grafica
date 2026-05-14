@@ -168,11 +168,23 @@ std::vector<fs::path> BuildLocalSearchRoots(const fs::path& directory)
     searchRoots.push_back(directory);
 
     const fs::path parent = directory.parent_path();
+    const bool parentHasTextureDir = fs::exists(parent / "textures") || fs::exists(parent / "Textures");
     if (!parent.empty()
         && parent != directory
-        && (directory.filename() == "source" || fs::exists(parent / "textures")))
+        && (directory.filename() == "source"
+            || directory.filename() == "Low_poly"
+            || directory.filename() == "High_poly"
+            || parentHasTextureDir))
     {
         searchRoots.push_back(parent);
+        if (fs::exists(parent / "textures"))
+        {
+            searchRoots.push_back(parent / "textures");
+        }
+        if (fs::exists(parent / "Textures"))
+        {
+            searchRoots.push_back(parent / "Textures");
+        }
     }
 
     return searchRoots;
@@ -292,6 +304,8 @@ void Model::LoadModel(const std::filesystem::path& path)
     sourceTriangleCount_ = 0;
     removedDuplicateTriangleCount_ = 0;
     removedDegenerateTriangleCount_ = 0;
+    animationCount_ = 0;
+    boneCount_ = 0;
 
     Assimp::Importer importer;
     DebugLog::Info("Model", "ReadFile begin path=", path.string(), " loadTextures=", loadTextures_);
@@ -314,13 +328,48 @@ void Model::LoadModel(const std::filesystem::path& path)
 
     directory_ = path.parent_path();
     sourceFilename_ = ToLowerAscii(path.filename().string());
+    animationCount_ = scene->mNumAnimations;
     DebugLog::Info(
         "Model",
         "Scene stats path=", path.string(),
         " meshes=", scene->mNumMeshes,
         " materials=", scene->mNumMaterials,
-        " textures=", scene->mNumTextures);
+        " textures=", scene->mNumTextures,
+        " animations=", scene->mNumAnimations);
+    for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex)
+    {
+        const aiAnimation* animation = scene->mAnimations[animationIndex];
+        DebugLog::Info(
+            "ANIM",
+            "Animation source=", sourceFilename_,
+            " index=", animationIndex,
+            " name=", animation->mName.C_Str(),
+            " duration=", animation->mDuration,
+            " ticksPerSecond=", animation->mTicksPerSecond,
+            " channels=", animation->mNumChannels);
+        const unsigned int channelLogCount = std::min(animation->mNumChannels, 4u);
+        for (unsigned int channelIndex = 0; channelIndex < channelLogCount; ++channelIndex)
+        {
+            const aiNodeAnim* channel = animation->mChannels[channelIndex];
+            DebugLog::Info(
+                "ANIM",
+                "Channel source=", sourceFilename_,
+                " clip=", animationIndex,
+                " index=", channelIndex,
+                " node=", channel->mNodeName.C_Str(),
+                " positionKeys=", channel->mNumPositionKeys,
+                " rotationKeys=", channel->mNumRotationKeys,
+                " scalingKeys=", channel->mNumScalingKeys);
+        }
+    }
     ProcessNode(scene->mRootNode, scene, glm::mat4(1.0f), "");
+    DebugLog::Info(
+        "ANIM",
+        "Model=", sourceFilename_,
+        " animations=", animationCount_,
+        " bones=", boneCount_,
+        " supportsSkeletalAnimation=", (animationCount_ > 0 && boneCount_ > 0 ? "yes" : "no"),
+        " runtimeMode=", (animationCount_ > 0 && boneCount_ > 0 ? "procedural-fallback" : "static/procedural"));
     isLoaded_ = !meshes_.empty();
     DebugLog::Info(
         "Model",
@@ -370,6 +419,15 @@ Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nod
     std::vector<Vertex> vertices;
     std::vector<unsigned int> indices;
     std::vector<Texture> textures;
+    if (mesh->mNumBones > 0)
+    {
+        boneCount_ += mesh->mNumBones;
+        DebugLog::Info(
+            "ANIM",
+            "Mesh bones source=", sourceFilename_,
+            " mesh=", mesh->mName.C_Str(),
+            " bones=", mesh->mNumBones);
+    }
     const glm::mat3 normalTransform = glm::inverseTranspose(glm::mat3(nodeTransform));
     glm::vec3 meshMin(std::numeric_limits<float>::max());
     glm::vec3 meshMax(std::numeric_limits<float>::lowest());
@@ -486,6 +544,14 @@ Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nod
         }
         if (diffuseTextures.empty())
         {
+            const std::optional<Texture> fallbackTexture = TryLoadFallbackTexture("texture_diffuse");
+            if (fallbackTexture.has_value())
+            {
+                diffuseTextures.push_back(*fallbackTexture);
+            }
+        }
+        if (diffuseTextures.empty())
+        {
             const std::optional<Texture> materialColorTexture = TryBuildMaterialColorTexture(material, "texture_diffuse");
             if (materialColorTexture.has_value())
             {
@@ -552,11 +618,14 @@ std::vector<Texture> Model::LoadMaterialTextures(
             continue;
         }
 
+        DebugLog::Info("Model", "Texture requested source=", sourceFilename_, " ref=", textureReference);
         const std::optional<fs::path> texturePath = ResolveTexturePath(textureReference);
         if (!texturePath.has_value())
         {
+            DebugLog::Info("Model", "Texture unresolved source=", sourceFilename_, " ref=", textureReference);
             continue;
         }
+        DebugLog::Info("Model", "Texture resolved source=", sourceFilename_, " path=", texturePath->string());
 
         const std::string normalizedPath = texturePath->lexically_normal().string();
 
@@ -709,7 +778,13 @@ std::optional<Texture> Model::TryBuildGeneratedTreeTexture(const aiMesh* mesh, c
 
 std::optional<Texture> Model::TryLoadFallbackTexture(const std::string& typeName)
 {
-    bool hasLocalTextureContainer = directory_.filename() == "source" || fs::exists(directory_ / "textures");
+    bool hasLocalTextureContainer = directory_.filename() == "source"
+        || directory_.filename() == "Low_poly"
+        || directory_.filename() == "High_poly"
+        || fs::exists(directory_ / "textures")
+        || fs::exists(directory_ / "Textures")
+        || fs::exists(directory_.parent_path() / "textures")
+        || fs::exists(directory_.parent_path() / "Textures");
     if (!hasLocalTextureContainer && fs::exists(directory_) && fs::is_directory(directory_))
     {
         for (const fs::directory_entry& entry : fs::directory_iterator(directory_))
@@ -783,6 +858,7 @@ std::optional<Texture> Model::TryLoadFallbackTexture(const std::string& typeName
         texture.type = typeName;
         texture.path = normalizedPath;
         texturesLoaded_.push_back(texture);
+        DebugLog::Info("Model", "Fallback texture selected source=", sourceFilename_, " path=", normalizedPath);
         return texture;
     }
     catch (const std::exception& error)
@@ -816,12 +892,17 @@ std::optional<fs::path> Model::ResolveTexturePath(const std::string& textureRefe
     candidatePaths.push_back((directory_ / referencePath).lexically_normal());
     candidatePaths.push_back((directory_ / filename).lexically_normal());
     candidatePaths.push_back((directory_ / "textures" / filename).lexically_normal());
+    candidatePaths.push_back((directory_ / "Textures" / filename).lexically_normal());
 
     const std::vector<fs::path> searchRoots = BuildLocalSearchRoots(directory_);
     for (const fs::path& root : searchRoots)
     {
         candidatePaths.push_back((root / filename).lexically_normal());
         candidatePaths.push_back((root / "textures" / filename).lexically_normal());
+        candidatePaths.push_back((root / "Textures" / filename).lexically_normal());
+        candidatePaths.push_back((root / "source" / filename).lexically_normal());
+        candidatePaths.push_back((root / "Low_poly" / filename).lexically_normal());
+        candidatePaths.push_back((root / "High_poly" / filename).lexically_normal());
     }
 
     for (const fs::path& candidate : candidatePaths)

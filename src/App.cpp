@@ -385,6 +385,8 @@ bool App::Init()
     camera_.SetPlayerAnchor(player_.GetEyePosition());
     camera_.SetOrbitTarget(player_.GetOrbitTarget());
     camera_.SetOrbitBounds(scene_->GetSceneBoundsMin(), scene_->GetSceneBoundsMax());
+    camera_.SetCollisionColliders(scene_->BuildCameraSolidColliders());
+    player_.SetZoneTwoWalkableSurfaces(scene_->BuildZoneTwoWalkableSurfaces());
     UpdateWindowTitle();
     DebugLog::Info("App", "Init() complete");
     return true;
@@ -510,6 +512,8 @@ void App::Update()
     player_.Update(input_, camera_.GetMovementYawDegrees());
     camera_.SetPlayerAnchor(player_.GetEyePosition());
     camera_.SetOrbitTarget(player_.GetOrbitTarget());
+    camera_.SetCollisionColliders(scene_->BuildCameraSolidColliders());
+    player_.SetZoneTwoWalkableSurfaces(scene_->BuildZoneTwoWalkableSurfaces());
 
     if (scene_ != nullptr)
     {
@@ -557,8 +561,53 @@ void App::Render()
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     scene_->Render(camera_, projection);
-    if (physicsDebugEnabled_ && debugOverlayRenderer_ != nullptr)
+    if (debugOverlayRenderer_ != nullptr)
     {
+        const float damageFlashAlpha = scene_->GetDamageFlashAlpha();
+        if (damageFlashAlpha > 0.001f)
+        {
+            debugOverlayRenderer_->RenderFullscreenTint(
+                framebufferWidth_,
+                framebufferHeight_,
+                glm::vec3(1.0f, 0.02f, 0.02f),
+                damageFlashAlpha);
+        }
+        debugOverlayRenderer_->RenderAt(
+            scene_->BuildHudLines(),
+            framebufferWidth_,
+            framebufferHeight_,
+            glm::vec2(18.0f, 18.0f),
+            3.0f,
+            glm::vec3(1.0f, 0.94f, 0.55f),
+            0.58f);
+        debugOverlayRenderer_->RenderAt(
+            scene_->BuildInstructionLines(),
+            framebufferWidth_,
+            framebufferHeight_,
+            glm::vec2(22.0f, static_cast<float>(framebufferHeight_) * 0.58f),
+            2.55f,
+            glm::vec3(0.92f, 0.97f, 1.0f),
+            0.52f);
+        debugOverlayRenderer_->RenderAt(
+            scene_->BuildContextMessageLines(),
+            framebufferWidth_,
+            framebufferHeight_,
+            glm::vec2(static_cast<float>(framebufferWidth_) * 0.58f, static_cast<float>(framebufferHeight_) * 0.46f),
+            2.75f,
+            glm::vec3(1.0f, 0.88f, 0.34f),
+            0.56f);
+        debugOverlayRenderer_->RenderAt(
+            scene_->BuildCenterMessageLines(),
+            framebufferWidth_,
+            framebufferHeight_,
+            glm::vec2(0.0f, static_cast<float>(framebufferHeight_) * 0.42f),
+            3.7f,
+            glm::vec3(1.0f, 0.98f, 0.80f),
+            0.64f,
+            true);
+        if (physicsDebugEnabled_)
+        {
+        std::vector<std::string> overlayLines;
         const PlayerSnapshot& playerSnapshot = player_.GetSnapshot();
         const glm::vec3 cameraPosition = camera_.GetPosition();
         const char* cameraMode = camera_.GetMode() == CameraMode::Fps ? "FPS" : "THIRD";
@@ -573,14 +622,24 @@ void App::Render()
             return stream.str();
         };
 
-        std::vector<std::string> debugLines;
+        overlayLines.push_back("");
         std::ostringstream fpsStream;
         fpsStream << "FPS " << std::fixed << std::setprecision(1) << displayedFps_;
-        debugLines.push_back(fpsStream.str());
-        debugLines.push_back(formatVec3("XYZ", playerSnapshot.position));
-        debugLines.push_back(formatVec3("CAM", cameraPosition));
-        debugLines.push_back(std::string("CAMERA ") + cameraMode);
-        debugOverlayRenderer_->Render(debugLines, framebufferWidth_, framebufferHeight_);
+        overlayLines.push_back(fpsStream.str());
+        overlayLines.push_back(formatVec3("XYZ", playerSnapshot.position));
+        overlayLines.push_back(formatVec3("CAM", cameraPosition));
+        overlayLines.push_back(std::string("CAMERA ") + cameraMode);
+        std::vector<std::string> playerDebugLines = player_.BuildDebugLines();
+        overlayLines.insert(overlayLines.end(), playerDebugLines.begin(), playerDebugLines.end());
+        debugOverlayRenderer_->RenderAt(
+            overlayLines,
+            framebufferWidth_,
+            framebufferHeight_,
+            glm::vec2(18.0f, 92.0f),
+            2.45f,
+            glm::vec3(0.74f, 1.0f, 0.74f),
+            0.50f);
+        }
     }
     if (traceCurrentFrame_)
     {
@@ -598,7 +657,7 @@ void App::SetMouseCaptured(bool captured)
 
 void App::UpdateWindowTitle() const
 {
-    glfwSetWindowTitle(window_, "Kirby Vegetable Valley - Laboratorio P0");
+    glfwSetWindowTitle(window_, "Kirby Vegetable Valley - Laboratorio P1");
 }
 
 void App::FramebufferSizeCallback(GLFWwindow* window, int width, int height)

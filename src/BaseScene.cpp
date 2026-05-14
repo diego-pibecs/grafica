@@ -290,11 +290,170 @@ float SpecularStrengthForEntity(const std::string& name)
     if (lowerName.find("tree") != std::string::npos
         || lowerName.find("bush") != std::string::npos
         || lowerName.find("flower") != std::string::npos
+        || lowerName.find("grass") != std::string::npos
+        || lowerName.find("mushroom") != std::string::npos
         || lowerName.find("rock") != std::string::npos)
     {
         return 0.0f;
     }
     return 0.05f;
+}
+
+bool IsStarEntity(const std::string& name)
+{
+    const std::string lowerName = ToLowerAscii(name);
+    return lowerName == "portal-dummy-star"
+        || lowerName == "hidden-valley-star"
+        || lowerName == "parkour-star"
+        || lowerName.rfind("star-", 0) == 0
+        || lowerName.find("-star") != std::string::npos;
+}
+
+bool UseTextureForEntity(const std::string& name, bool modelHasTextures)
+{
+    const std::string lowerName = ToLowerAscii(name);
+    if (IsStarEntity(name)
+        || lowerName.find("nature-mushroom") != std::string::npos
+        || lowerName.find("fallen-tree") != std::string::npos)
+    {
+        return false;
+    }
+    return modelHasTextures;
+}
+
+glm::vec3 BaseColorForEntity(const std::string& name)
+{
+    const std::string lowerName = ToLowerAscii(name);
+    if (IsStarEntity(name))
+    {
+        return glm::vec3(1.0f, 0.90f, 0.25f);
+    }
+    if (lowerName.find("fallen-tree") != std::string::npos)
+    {
+        return glm::vec3(0.50f, 0.31f, 0.16f);
+    }
+    if (lowerName.find("mushroom") != std::string::npos)
+    {
+        return glm::vec3(0.94f, 0.38f, 0.30f);
+    }
+    if (lowerName.find("tree") != std::string::npos)
+    {
+        return glm::vec3(0.26f, 0.54f, 0.22f);
+    }
+    if (lowerName.find("bush") != std::string::npos)
+    {
+        return glm::vec3(0.22f, 0.56f, 0.24f);
+    }
+    if (lowerName.find("grass") != std::string::npos)
+    {
+        return glm::vec3(0.35f, 0.64f, 0.26f);
+    }
+    if (lowerName.find("rock") != std::string::npos)
+    {
+        return glm::vec3(0.42f, 0.43f, 0.40f);
+    }
+    if (lowerName.find("chick") != std::string::npos)
+    {
+        return glm::vec3(0.08f, 0.075f, 0.06f);
+    }
+    if (lowerName.find("bat") != std::string::npos)
+    {
+        return glm::vec3(0.24f, 0.20f, 0.30f);
+    }
+    if (lowerName.find("flower") != std::string::npos)
+    {
+        return glm::vec3(0.95f, 0.86f, 0.92f);
+    }
+    return glm::vec3(0.92f, 0.86f, 0.72f);
+}
+
+float UnlitFactorForEntity(const std::string& name)
+{
+    return IsStarEntity(name) ? 0.28f : 0.0f;
+}
+
+bool BlocksNavigationForEntity(const std::string& name)
+{
+    const std::string lowerName = ToLowerAscii(name);
+    return lowerName.find("tree") != std::string::npos
+        || lowerName.find("bush") != std::string::npos
+        || lowerName.find("rock") != std::string::npos;
+}
+
+glm::vec3 BlockerHalfExtentsForEntity(const std::string& name, float targetSize)
+{
+    const std::string lowerName = ToLowerAscii(name);
+    if (lowerName.find("fallen-tree") != std::string::npos)
+    {
+        return glm::vec3(std::max(1.1f, targetSize * 0.62f), 0.45f, std::max(0.45f, targetSize * 0.20f));
+    }
+    if (lowerName.find("tree") != std::string::npos)
+    {
+        const float radius = std::clamp(targetSize * 0.13f, 0.55f, 0.95f);
+        return glm::vec3(radius, 1.35f, radius);
+    }
+    if (lowerName.find("bush") != std::string::npos)
+    {
+        const float radius = std::clamp(targetSize * 0.45f, 0.45f, 0.90f);
+        return glm::vec3(radius, 0.60f, radius);
+    }
+    if (lowerName.find("rock") != std::string::npos)
+    {
+        const float radius = std::clamp(targetSize * 0.42f, 0.45f, 0.85f);
+        return glm::vec3(radius, 0.50f, radius);
+    }
+    return glm::vec3(0.0f);
+}
+
+float DistanceToSegment2D(const glm::vec2& point, const glm::vec2& start, const glm::vec2& end)
+{
+    const glm::vec2 segment = end - start;
+    const float lengthSquared = glm::dot(segment, segment);
+    if (lengthSquared <= 0.0001f)
+    {
+        return glm::length(point - start);
+    }
+    const float t = std::clamp(glm::dot(point - start, segment) / lengthSquared, 0.0f, 1.0f);
+    return glm::length(point - (start + segment * t));
+}
+
+float DistanceToZoneOnePath(const glm::vec3& position)
+{
+    const glm::vec2 point(position.x, position.z);
+    const std::array<glm::vec2, 4> path {
+        glm::vec2(0.0f, 16.73f),
+        glm::vec2(1.17f, 6.17f),
+        glm::vec2(-3.70f, -5.10f),
+        glm::vec2(0.0f, -16.0f)
+    };
+
+    float bestDistance = std::numeric_limits<float>::max();
+    for (std::size_t index = 1; index < path.size(); ++index)
+    {
+        bestDistance = std::min(bestDistance, DistanceToSegment2D(point, path[index - 1], path[index]));
+    }
+    return bestDistance;
+}
+
+bool IsZoneOnePropCandidateSafe(const glm::vec3& position, float pathClearance)
+{
+    if (position.x < -12.5f || position.x > 12.5f || position.z < -19.0f || position.z > 20.0f)
+    {
+        return false;
+    }
+    if (DistanceToZoneOnePath(position) < pathClearance)
+    {
+        return false;
+    }
+    if (glm::length(glm::vec2(position.x, position.z) - glm::vec2(2.0f, -13.0f)) < 3.0f)
+    {
+        return false;
+    }
+    if (glm::length(glm::vec2(position.x, position.z) - glm::vec2(0.0f, 16.0f)) < 3.0f)
+    {
+        return false;
+    }
+    return true;
 }
 
 PhysicsAabb MakeEmptyPhysicsBounds()
@@ -493,8 +652,39 @@ void BaseScene::Update(const PlayerSnapshot& player, float absoluteTimeSeconds, 
 {
     latestPlayer_ = player;
     absoluteTimeSeconds_ = absoluteTimeSeconds;
+    previousZone_ = currentZone_;
+    currentZone_ = DetermineZone(player.position);
 
     const float dt = std::clamp(deltaTimeSeconds, 0.0f, 0.1f);
+    if (timedMessage_.remainingTime > 0.0f)
+    {
+        timedMessage_.remainingTime = std::max(0.0f, timedMessage_.remainingTime - dt);
+    }
+    if (damageFlashTimer_ > 0.0f)
+    {
+        damageFlashTimer_ = std::max(0.0f, damageFlashTimer_ - dt);
+    }
+    if (damageCooldownTimer_ > 0.0f)
+    {
+        damageCooldownTimer_ = std::max(0.0f, damageCooldownTimer_ - dt);
+    }
+    UpdateParkourGuideLight(player, dt);
+    if (gameOverPendingReset_)
+    {
+        if (absoluteTimeSeconds_ - gameOverStartTime_ >= 2.5f && !portalTeleportPending_)
+        {
+            ResetGameState(true);
+            pendingTeleportPosition_ = playerSpawnPosition_;
+            pendingTeleportYawDegrees_ = playerSpawnYawDegrees_;
+            portalTeleportPending_ = true;
+            gameOverPendingReset_ = false;
+        }
+        return;
+    }
+    if (previousZone_ != currentZone_ && currentZone_ == SceneZone::Parkour)
+    {
+        ShowTimedMessage("SALTA ENTRE PLATAFORMAS PARA LLEGAR A WHISPY WOODS", 4.5f, 4);
+    }
     if (kirbyKeyframeActive_ && absoluteTimeSeconds_ - kirbyKeyframeStartTime_ > 2.20f)
     {
         kirbyKeyframeActive_ = false;
@@ -519,38 +709,34 @@ void BaseScene::Update(const PlayerSnapshot& player, float absoluteTimeSeconds, 
     {
         appleKeyframeActive_ = false;
     }
+    if (whispyState_ == WhispyState::Defeating && WhispyDefeatProgress() >= 1.0f)
+    {
+        whispyState_ = WhispyState::Defeated;
+        finalZoneActivated_ = true;
+        shadowMapDirty_ = true;
+        pointShadowMapsDirty_ = true;
+    }
     if (kirbyKeyframeActive_
         || portalKeyframeActive_
         || appleKeyframeActive_
+        || whispyState_ == WhispyState::Defeating
         || glm::length(glm::vec2(player.velocity.x, player.velocity.z)) > 0.01f)
     {
         shadowMapDirty_ = true;
     }
 
-    // Zona 2 es un parkour suspendido: si el jugador sale del volumen seguro,
-    // la escena lo trata como una caida al vacio y lo devuelve a la zona inicial.
-    const bool playerNearZoneTwo = player.position.x > 48.0f;
-    const bool outsideZoneTwoVolume = player.position.x < 57.8f
-        || player.position.x > 76.8f
-        || player.position.z < -24.0f
-        || player.position.z > 17.8f
-        || player.position.y < -1.0f;
-    if (playerNearZoneTwo && outsideZoneTwoVolume && !portalTeleportPending_)
+    const bool playerNearZoneTwo = currentZone_ != SceneZone::Entrance || player.position.x > 48.0f;
+    const bool outsideZoneTwoVolume = player.position.x < 55.0f
+        || player.position.x > 82.0f
+        || player.position.z < -28.0f
+        || player.position.z > 22.0f
+        || player.position.y < -7.5f;
+    if (playerNearZoneTwo
+        && outsideZoneTwoVolume
+        && !portalTeleportPending_
+        && absoluteTimeSeconds_ - lastFallRespawnTime_ > 1.4f)
     {
-        pendingTeleportPosition_ = playerSpawnPosition_;
-        pendingTeleportYawDegrees_ = playerSpawnYawDegrees_;
-        portalTeleportPending_ = true;
-        DebugLog::Info("BaseScene", "Void reset triggered from zone two");
-    }
-
-    for (PointLight& pointLight : pointLights_)
-    {
-        if (pointLight.label == "whispy-final-star")
-        {
-            const float pulse = 0.5f + (0.5f * std::sin(absoluteTimeSeconds_ * 3.0f));
-            pointLight.intensity = finalZoneActivated_ ? 5.5f + pulse : 1.6f;
-            pointLight.range = finalZoneActivated_ ? 12.0f : 7.0f;
-        }
+        HandleZoneTwoFall();
     }
 
     for (InteractiveDoor& door : doors_)
@@ -565,6 +751,9 @@ void BaseScene::Update(const PlayerSnapshot& player, float absoluteTimeSeconds, 
             door.openProgress = std::max(target, door.openProgress - (door.animationSpeed * dt));
         }
     }
+
+    RebuildContextMessage(player);
+    UpdateContactDamage(player);
 }
 
 void BaseScene::Render(const CameraController& camera, const glm::mat4& projection) const
@@ -658,17 +847,27 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, shadowMapTexture_);
 
-    const std::size_t activeLightCount = std::min(pointLights_.size(), static_cast<std::size_t>(kMaxPointLights));
-    if (pointLights_.size() > static_cast<std::size_t>(kMaxPointLights) && traceRenderCall)
+    std::vector<const PointLight*> activeLights;
+    activeLights.reserve(pointLights_.size());
+    for (const PointLight& pointLight : pointLights_)
     {
-        DebugLog::Info("BaseScene", "Point light count exceeds shader cap: ", pointLights_.size(), " > ", kMaxPointLights);
+        const bool sharedParkourFinalLight = pointLight.visibleAcrossZones && currentZone_ != SceneZone::Entrance;
+        if (pointLight.intensity > 0.01f && (pointLight.ownerZone == currentZone_ || sharedParkourFinalLight))
+        {
+            activeLights.push_back(&pointLight);
+        }
+    }
+    const std::size_t activeLightCount = std::min(activeLights.size(), static_cast<std::size_t>(kMaxPointLights));
+    if (activeLights.size() > static_cast<std::size_t>(kMaxPointLights) && traceRenderCall)
+    {
+        DebugLog::Info("BaseScene", "Point light count exceeds shader cap: ", activeLights.size(), " > ", kMaxPointLights);
     }
 
     const int pointLightCount = static_cast<int>(activeLightCount);
     bool pointShadowsAvailable = false;
     for (std::size_t index = 0; index < activeLightCount; ++index)
     {
-        const PointLight& pointLight = pointLights_[index];
+        const PointLight& pointLight = *activeLights[index];
         pointShadowsAvailable = pointShadowsAvailable || (pointLight.castsShadow && pointLight.shadowCubeMap != 0);
     }
     litShader_->SetInt("pointLightCount", pointLightCount);
@@ -680,7 +879,7 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
         litShader_->SetInt(shadowPrefix, kPointShadowTextureUnitOffset + index);
         if (index < pointLightCount)
         {
-            const PointLight& pointLight = pointLights_[static_cast<std::size_t>(index)];
+            const PointLight& pointLight = *activeLights[static_cast<std::size_t>(index)];
             litShader_->SetVec3(prefix + ".position", pointLight.position);
             litShader_->SetVec3(prefix + ".color", pointLight.color);
             litShader_->SetFloat(prefix + ".intensity", pointLight.intensity);
@@ -715,16 +914,20 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
     const double litMs = MillisecondsSince(litBegin);
 
     const auto markerBegin = std::chrono::steady_clock::now();
-    lightMarkerShader_->Use();
-    lightMarkerShader_->SetMat4("projection", projection);
-    lightMarkerShader_->SetMat4("view", view);
-    lightMarkerShader_->SetVec3("color", glm::vec3(1.0f, 0.90f, 0.62f));
-    for (const PointLight& pointLight : pointLights_)
+    if (physicsDebugEnabled_)
     {
-        glm::mat4 lightMarkerModel = glm::translate(glm::mat4(1.0f), pointLight.position);
-        lightMarkerModel = glm::scale(lightMarkerModel, glm::vec3(0.12f));
-        lightMarkerShader_->SetMat4("model", lightMarkerModel);
-        lightMarkerMesh_->Draw();
+        lightMarkerShader_->Use();
+        lightMarkerShader_->SetMat4("projection", projection);
+        lightMarkerShader_->SetMat4("view", view);
+        lightMarkerShader_->SetVec3("color", glm::vec3(1.0f, 0.90f, 0.62f));
+        for (const PointLight* pointLightPtr : activeLights)
+        {
+            const PointLight& pointLight = *pointLightPtr;
+            glm::mat4 lightMarkerModel = glm::translate(glm::mat4(1.0f), pointLight.position);
+            lightMarkerModel = glm::scale(lightMarkerModel, glm::vec3(0.12f));
+            lightMarkerShader_->SetMat4("model", lightMarkerModel);
+            lightMarkerMesh_->Draw();
+        }
     }
     if (traceRenderCall)
     {
@@ -762,7 +965,7 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
             {
                 activeLightLabels += ", ";
             }
-            activeLightLabels += pointLights_[static_cast<std::size_t>(index)].label;
+            activeLightLabels += activeLights[static_cast<std::size_t>(index)]->label;
         }
 
         const double frameCount = std::max<double>(1.0, static_cast<double>(renderPerfStats_.frameCount));
@@ -802,15 +1005,42 @@ void BaseScene::SetPhysicsDebugEnabled(bool enabled)
 
 bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition)
 {
-    if (RayIntersectsSphere(rayOrigin, rayDirection, portalPropPosition_, 1.15f, 5.2f))
+    for (CollectibleStar& star : collectibleStars_)
     {
-        if (!portalKeyframeActive_ && !portalTeleportPending_)
+        if (!star.collected && RayIntersectsSphere(rayOrigin, rayDirection, star.position, 1.15f, 5.6f))
         {
+            star.collected = true;
+            stars_ += 1;
+            if (star.entityName == "portal-dummy-star")
+            {
+                portalStarCollected_ = true;
+            }
+            ShowTimedMessage("ESTRELLA OBTENIDA", 2.6f, 8);
+            shadowMapDirty_ = true;
+            pointShadowMapsDirty_ = true;
+            DebugLog::Info("BaseScene", "Collectible star picked name=", star.entityName, " stars=", stars_);
+            return true;
+        }
+    }
+
+    if (RayIntersectsSphere(rayOrigin, rayDirection, portalPosition_, 2.1f, 6.2f)
+        || RayIntersectsSphere(rayOrigin, rayDirection, portalPropPosition_, 1.4f, 5.2f))
+    {
+        if (!portalStarCollected_)
+        {
+            ShowTimedMessage("RECOGE LA ESTRELLA PARA ACTIVAR EL PORTAL", 2.4f, 5);
+            return true;
+        }
+
+        if (!portalKeyframeActive_ && !portalTeleportPending_ && !portalActivated_)
+        {
+            portalActivated_ = true;
             portalKeyframeActive_ = true;
             portalOpen_ = false;
             portalTeleportPending_ = false;
             portalTeleportConsumed_ = false;
             portalKeyframeStartTime_ = absoluteTimeSeconds_;
+            ShowTimedMessage("PORTAL ACTIVADO", 2.2f, 6);
             shadowMapDirty_ = true;
             DebugLog::Info("BaseScene", "Portal interaction accepted");
         }
@@ -828,10 +1058,26 @@ bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDire
         return false;
     }
 
-    finalZoneActivated_ = !finalZoneActivated_;
+    if (whispyState_ == WhispyState::Defeated)
+    {
+        ShowTimedMessage("WHISPY YA FUE DERROTADO", 2.5f, 8);
+        return true;
+    }
+
+    if (stars_ < 3)
+    {
+        ShowTimedMessage("NECESITAS MAS PODER PARA DERROTAR A WHISPY WOODS", 3.5f, 9);
+        ApplyPlayerDamage("NECESITAS MAS PODER PARA DERROTAR A WHISPY WOODS", true);
+        return true;
+    }
+
+    finalZoneActivated_ = true;
     finalActivationTime_ = absoluteTimeSeconds_;
     appleKeyframeActive_ = true;
     appleKeyframeStartTime_ = absoluteTimeSeconds_;
+    whispyState_ = WhispyState::Defeating;
+    whispyDefeatStartTime_ = absoluteTimeSeconds_;
+    ShowTimedMessage("WHISPY DERROTADO", 4.0f, 10);
     shadowMapDirty_ = true;
     pointShadowMapsDirty_ = true;
     DebugLog::Info(
@@ -1026,6 +1272,76 @@ std::vector<WalkableBlocker> BaseScene::BuildWalkableBlockers() const
     return blockers;
 }
 
+std::vector<PlayerWalkableSurface> BaseScene::BuildZoneTwoWalkableSurfaces() const
+{
+    return zoneTwoWalkableSurfaces_;
+}
+
+std::vector<CameraSolidCollider> BaseScene::BuildCameraSolidColliders() const
+{
+    return solidColliders_;
+}
+
+std::vector<std::string> BaseScene::BuildHudLines() const
+{
+    std::vector<std::string> lines;
+    lines.push_back("ESTRELLAS X " + std::to_string(stars_));
+    lines.push_back("VIDAS X " + std::to_string(lives_));
+    return lines;
+}
+
+std::vector<std::string> BaseScene::BuildInstructionLines() const
+{
+    std::vector<std::string> lines;
+    if (absoluteTimeSeconds_ < 10.0f)
+    {
+        lines.push_back("WASD: MOVERSE");
+        lines.push_back("MOUSE/FLECHAS: MIRAR");
+        lines.push_back("TAB: CAMARA");
+        lines.push_back("E: INTERACTUAR");
+        lines.push_back("ESPACIO: SALTAR");
+        lines.push_back("SHIFT: CORRER");
+    }
+    return lines;
+}
+
+std::vector<std::string> BaseScene::BuildContextMessageLines() const
+{
+    std::vector<std::string> lines;
+    if (timedMessage_.remainingTime > 0.0f && timedMessage_.priority < 8)
+    {
+        lines.push_back(timedMessage_.text);
+    }
+    else if (!contextMessage_.empty())
+    {
+        lines.push_back(contextMessage_);
+    }
+    return lines;
+}
+
+std::vector<std::string> BaseScene::BuildCenterMessageLines() const
+{
+    if (timedMessage_.remainingTime > 0.0f && timedMessage_.priority >= 8)
+    {
+        if (timedMessage_.text == "INTENTALO DE NUEVO")
+        {
+            return { "VIDA PERDIDA", "INTENTALO DE NUEVO" };
+        }
+        if (timedMessage_.text == "NECESITAS MAS PODER PARA DERROTAR A WHISPY WOODS")
+        {
+            return { "NECESITAS MAS PODER", "VIDA PERDIDA" };
+        }
+        if (timedMessage_.text == "NO TOQUES AL POLLO"
+            || timedMessage_.text == "NO TOQUES AL MURCIELAGO"
+            || timedMessage_.text == "WHISPY TE HA GOLPEADO")
+        {
+            return { "VIDA PERDIDA", timedMessage_.text };
+        }
+        return { timedMessage_.text };
+    }
+    return {};
+}
+
 void BaseScene::LoadEntities()
 {
     DebugLog::Info("BaseScene", "Loading scene entities");
@@ -1033,12 +1349,16 @@ void BaseScene::LoadEntities()
     doors_.clear();
     sceneBlockers_.clear();
     platforms_.clear();
+    zoneTwoWalkableSurfaces_.clear();
+    solidColliders_.clear();
+    collectibleStars_.clear();
     staticCollisionSources_.clear();
     kirbyPlacement_ = ModelPlacement {};
     whispyFbxPlacement_ = ModelPlacement {};
     whispyFbxPreviewEnabled_ = false;
     whispyFbxLoadAttempted_ = false;
     whispyFbxLoadFailed_ = false;
+    ResetGameState(true);
     LoadVegetableValleyDemo();
 }
 
@@ -1050,11 +1370,20 @@ void BaseScene::LoadVegetableValleyDemo()
     zoneTwoCenter_ = glm::vec3(70.0f, 2.0f, -4.0f);
     whispyPosition_ = glm::vec3(70.0f, 3.50f, -20.0f);
     portalPosition_ = glm::vec3(0.0f, 1.25f, -15.5f);
-    portalPropPosition_ = glm::vec3(0.0f, 1.0f, -13.4f);
+    portalPropPosition_ = glm::vec3(2.0f, 1.0f, -13.0f);
     portalTargetPosition_ = glm::vec3(62.0f, 0.25f, 14.0f);
+    hiddenStarPosition_ = glm::vec3(11.2f, 1.0f, 13.4f);
+    parkourStarPosition_ = glm::vec3(70.0f, 4.10f, -13.8f);
     portalTargetYawDegrees_ = -90.0f;
     finalStarBasePosition_ = whispyPosition_ + glm::vec3(0.0f, 1.4f, 4.0f);
     activeModelLabel_ = "Kirby Vegetable Valley P1";
+
+    const glm::vec3 zoneOneCenter = (zoneOneBoundsMin_ + zoneOneBoundsMax_) * 0.5f;
+    AddSolidCollider(glm::vec3(zoneOneCenter.x, -0.05f, zoneOneCenter.z), glm::vec3(floorHalfExtents_.x, 0.05f, floorHalfExtents_.y));
+    AddSolidCollider(glm::vec3(zoneOneBoundsMin_.x - (boundaryWallThickness_ * 0.5f), boundaryWallHeight_ * 0.5f, zoneOneCenter.z), glm::vec3(boundaryWallThickness_ * 0.5f, boundaryWallHeight_ * 0.5f, floorHalfExtents_.y + boundaryWallThickness_));
+    AddSolidCollider(glm::vec3(zoneOneBoundsMax_.x + (boundaryWallThickness_ * 0.5f), boundaryWallHeight_ * 0.5f, zoneOneCenter.z), glm::vec3(boundaryWallThickness_ * 0.5f, boundaryWallHeight_ * 0.5f, floorHalfExtents_.y + boundaryWallThickness_));
+    AddSolidCollider(glm::vec3(zoneOneCenter.x, boundaryWallHeight_ * 0.5f, zoneOneBoundsMin_.z - (boundaryWallThickness_ * 0.5f)), glm::vec3(floorHalfExtents_.x + boundaryWallThickness_, boundaryWallHeight_ * 0.5f, boundaryWallThickness_ * 0.5f));
+    AddSolidCollider(glm::vec3(zoneOneCenter.x, boundaryWallHeight_ * 0.5f, zoneOneBoundsMax_.z + (boundaryWallThickness_ * 0.5f)), glm::vec3(floorHalfExtents_.x + boundaryWallThickness_, boundaryWallHeight_ * 0.5f, boundaryWallThickness_ * 0.5f));
 
     AddPrimitivePlatform("zone-two-start-platform", glm::vec3(62.0f, 0.10f, 14.0f), glm::vec3(7.5f, 0.20f, 6.0f), glm::vec3(0.20f, 0.25f, 0.44f));
     AddPrimitivePlatform("zone-two-step-a", glm::vec3(65.0f, 0.35f, 8.8f), glm::vec3(4.2f, 0.70f, 3.4f), glm::vec3(0.28f, 0.33f, 0.55f));
@@ -1062,7 +1391,10 @@ void BaseScene::LoadVegetableValleyDemo()
     AddPrimitivePlatform("zone-two-step-c", glm::vec3(65.0f, 1.00f, -1.8f), glm::vec3(4.0f, 2.00f, 3.2f), glm::vec3(0.24f, 0.28f, 0.48f));
     AddPrimitivePlatform("zone-two-step-d", glm::vec3(70.0f, 1.35f, -7.2f), glm::vec3(4.3f, 2.70f, 3.0f), glm::vec3(0.23f, 0.26f, 0.46f));
     AddPrimitivePlatform("zone-two-step-e", glm::vec3(66.8f, 1.55f, -11.8f), glm::vec3(4.2f, 3.10f, 3.0f), glm::vec3(0.24f, 0.27f, 0.47f));
-    AddPrimitivePlatform("zone-two-summit", glm::vec3(70.0f, 1.75f, -18.0f), glm::vec3(11.0f, 3.50f, 7.5f), glm::vec3(0.20f, 0.24f, 0.40f));
+    AddPrimitivePlatform("zone-two-step-f", glm::vec3(72.0f, 1.72f, -14.6f), glm::vec3(3.1f, 3.44f, 2.6f), glm::vec3(0.29f, 0.24f, 0.50f));
+    AddPrimitivePlatform("zone-two-step-g", glm::vec3(66.0f, 1.92f, -16.8f), glm::vec3(2.8f, 3.84f, 2.4f), glm::vec3(0.22f, 0.30f, 0.50f));
+    AddPrimitivePlatform("zone-two-final-approach", glm::vec3(70.0f, 2.05f, -20.2f), glm::vec3(4.8f, 4.10f, 3.0f), glm::vec3(0.30f, 0.26f, 0.52f));
+    AddPrimitivePlatform("zone-two-summit", glm::vec3(70.0f, 2.10f, -23.4f), glm::vec3(11.0f, 4.20f, 6.5f), glm::vec3(0.20f, 0.24f, 0.40f));
 
     SceneEntity kirbyEntity;
     kirbyEntity.name = "kirby-player";
@@ -1103,7 +1435,7 @@ void BaseScene::LoadVegetableValleyDemo()
 
     struct DecorationDesc
     {
-        const char* name;
+        std::string name;
         fs::path path;
         glm::vec3 position;
         float yawDegrees;
@@ -1112,30 +1444,366 @@ void BaseScene::LoadVegetableValleyDemo()
         bool contributesToCollision;
     };
 
-    const std::vector<DecorationDesc> decorations {
+    std::vector<DecorationDesc> decorations {
         { "start-tree-left", assetsRoot_ / "models" / "tree.fbx", glm::vec3(-9.8f, 0.0f, 16.2f), 24.0f, 6.2f, true, true },
         { "start-tree-right", assetsRoot_ / "models" / "tree.fbx", glm::vec3(9.8f, 0.0f, 14.0f), -18.0f, 6.4f, true, true },
-        { "section-one-bush-left", assetsRoot_ / "models" / "bushes" / "BushWithBerrys03.fbx", glm::vec3(-7.2f, -0.35f, 8.6f), 12.0f, 1.8f, true, false },
-        { "section-one-bush-right", assetsRoot_ / "models" / "bushes" / "Bush02.fbx", glm::vec3(7.3f, -0.35f, 6.0f), -22.0f, 1.7f, true, false },
+        { "section-one-bush-left", assetsRoot_ / "models" / "bushes" / "BushWithBerrys03.fbx", glm::vec3(-7.2f, -0.35f, 8.6f), 12.0f, 1.8f, true, true },
+        { "section-one-bush-right", assetsRoot_ / "models" / "bushes" / "Bush02.fbx", glm::vec3(7.3f, -0.35f, 6.0f), -22.0f, 1.7f, true, true },
         { "valley-tree-left", assetsRoot_ / "models" / "tree.fbx", glm::vec3(-10.3f, 0.0f, 1.0f), 61.0f, 6.8f, true, true },
         { "valley-tree-right", assetsRoot_ / "models" / "tree.fbx", glm::vec3(10.2f, 0.0f, -4.0f), -42.0f, 6.8f, true, true },
-        { "mid-rock-left", assetsRoot_ / "models" / "rocks" / "SM_Rocks_02.fbx", glm::vec3(-5.6f, 0.0f, -6.0f), 35.0f, 1.5f, false, false },
-        { "mid-rock-right", assetsRoot_ / "models" / "rocks" / "SM_Rocks_04.fbx", glm::vec3(5.7f, 0.0f, -9.0f), -30.0f, 1.6f, false, false },
-        { "parkour-crate-a", assetsRoot_ / "models" / "nuevos" / "crate" / "scene.gltf", glm::vec3(62.0f, 0.23f, 13.8f), 9.0f, 1.05f, false, false },
-        { "parkour-crate-b", assetsRoot_ / "models" / "nuevos" / "crate" / "scene.gltf", glm::vec3(65.1f, 0.78f, 8.6f), -14.0f, 1.10f, false, false },
-        { "parkour-crate-c", assetsRoot_ / "models" / "nuevos" / "crate" / "scene.gltf", glm::vec3(68.6f, 1.38f, 3.7f), 22.0f, 1.10f, false, false },
-        { "parkour-crate-d", assetsRoot_ / "models" / "nuevos" / "crate" / "scene.gltf", glm::vec3(65.1f, 2.08f, -1.9f), -32.0f, 1.12f, false, false },
-        { "parkour-crate-e", assetsRoot_ / "models" / "nuevos" / "crate" / "scene.gltf", glm::vec3(70.2f, 2.78f, -7.2f), 18.0f, 1.15f, false, false },
-        { "parkour-crate-f", assetsRoot_ / "models" / "nuevos" / "crate" / "scene.gltf", glm::vec3(66.8f, 3.18f, -11.8f), -18.0f, 1.12f, false, false },
-        { "parkour-star", assetsRoot_ / "models" / "nuevos" / "star.obj", glm::vec3(70.0f, 4.10f, -13.8f), 36.0f, 0.8f, false, false },
-        { "flower-left", assetsRoot_ / "models" / "flower" / "source" / "x3.fbx", glm::vec3(-4.6f, 0.0f, -12.0f), 10.0f, 1.0f, true, false },
-        { "flower-right", assetsRoot_ / "models" / "flower" / "source" / "x3.fbx", glm::vec3(4.4f, 0.0f, -14.0f), -16.0f, 1.0f, true, false },
-        { "final-tree-left", assetsRoot_ / "models" / "tree.fbx", glm::vec3(64.2f, 3.50f, -21.6f), 14.0f, 7.2f, true, true },
-        { "final-tree-right", assetsRoot_ / "models" / "tree.fbx", glm::vec3(76.0f, 3.50f, -21.8f), -39.0f, 7.0f, true, true },
-        { "wooden-sign-controls", assetsRoot_ / "models" / "wooden-sign" / "placa.fbx", glm::vec3(-2.8f, 0.0f, 15.5f), 28.0f, 1.3f, true, false },
-        { "portal-dummy-star", assetsRoot_ / "models" / "nuevos" / "star.obj", portalPropPosition_, 0.0f, 0.9f, false, false },
-        { "zone-two-guide-star", assetsRoot_ / "models" / "nuevos" / "star.obj", glm::vec3(65.0f, 2.0f, 7.8f), 20.0f, 0.75f, false, false }
+        { "mid-rock-left", assetsRoot_ / "models" / "rocks" / "SM_Rocks_02.fbx", glm::vec3(-5.6f, 0.0f, -6.0f), 35.0f, 1.5f, false, true },
+        { "mid-rock-right", assetsRoot_ / "models" / "rocks" / "SM_Rocks_04.fbx", glm::vec3(5.7f, 0.0f, -9.0f), -30.0f, 1.6f, false, true },
+        { "parkour-star", assetsRoot_ / "models" / "nuevos" / "star.obj", parkourStarPosition_, 36.0f, 0.8f, false, false },
+        { "hidden-valley-star", assetsRoot_ / "models" / "nuevos" / "star.obj", hiddenStarPosition_, 90.0f, 0.7f, false, false },
+        { "nature-flower-left", assetsRoot_ / "models" / "nature" / "flower.fbx", glm::vec3(-4.6f, 0.0f, -12.0f), 10.0f, 0.62f, true, false },
+        { "nature-flower-right", assetsRoot_ / "models" / "nature" / "flower.fbx", glm::vec3(4.4f, 0.0f, -14.0f), -16.0f, 0.62f, true, false },
+        { "nature-grass-a", assetsRoot_ / "models" / "nature" / "grass_01.fbx", glm::vec3(-7.0f, 0.0f, -9.8f), 18.0f, 0.85f, true, false },
+        { "nature-grass-b", assetsRoot_ / "models" / "nature" / "grass_02.fbx", glm::vec3(7.2f, 0.0f, -2.2f), -14.0f, 0.85f, true, false },
+        { "nature-mushrooms", assetsRoot_ / "models" / "nature" / "mushrooms.fbx", glm::vec3(-8.4f, 0.0f, 3.8f), 27.0f, 0.48f, true, false },
+        { "nature-fallen-tree", assetsRoot_ / "models" / "nature" / "fallen_tree.fbx", glm::vec3(3.69f, 0.0f, 0.74f), -22.0f, 2.15f, false, true },
+        { "zone-one-black-chick", assetsRoot_ / "models" / "Black_Chick" / "Low_poly" / "Chick_low.fbx", chickenPosition_, 34.0f, 1.0f, true, false },
+        { "zone-two-bat", assetsRoot_ / "models" / "animated-halloween-bat" / "source" / "Sketchfab_2023_10_26_02_42_48.fbx", batPosition_, -32.0f, 1.25f, true, false },
+        { "portal-dummy-star", assetsRoot_ / "models" / "nuevos" / "star.obj", portalPropPosition_, 0.0f, 0.9f, false, false }
     };
+
+    auto addZoneOneProp = [&](const std::string& name, const fs::path& path, const glm::vec3& position, float yaw, float targetSize, bool normalizeToHeight, bool collides = false)
+    {
+        decorations.push_back(DecorationDesc {
+            name,
+            path,
+            position,
+            yaw,
+            targetSize,
+            normalizeToHeight,
+            collides
+        });
+    };
+
+    const fs::path treePath = assetsRoot_ / "models" / "tree.fbx";
+    const fs::path bushA = assetsRoot_ / "models" / "bushes" / "Bush01.fbx";
+    const fs::path bushB = assetsRoot_ / "models" / "bushes" / "Bush02.fbx";
+    const fs::path bushBerry = assetsRoot_ / "models" / "bushes" / "BushWithBerrys01.fbx";
+    const fs::path grassA = assetsRoot_ / "models" / "nature" / "grass_01.fbx";
+    const fs::path grassB = assetsRoot_ / "models" / "nature" / "grass_02.fbx";
+    const fs::path flowerPath = assetsRoot_ / "models" / "nature" / "flower.fbx";
+    const fs::path mushroomA = assetsRoot_ / "models" / "nature" / "mushrooms.fbx";
+    const fs::path mushroomB = assetsRoot_ / "models" / "nature" / "mushrooms_02.fbx";
+    const fs::path rockA = assetsRoot_ / "models" / "rocks" / "SM_Rocks_01.fbx";
+    const fs::path rockB = assetsRoot_ / "models" / "rocks" / "SM_Rocks_03.fbx";
+
+    const std::array<glm::vec3, 8> extraTreePositions {
+        glm::vec3(-11.7f, 0.0f, 9.8f),
+        glm::vec3(11.4f, 0.0f, 8.8f),
+        glm::vec3(-11.5f, 0.0f, -7.5f),
+        glm::vec3(11.2f, 0.0f, -15.2f),
+        glm::vec3(-8.8f, 0.0f, -16.8f),
+        glm::vec3(8.7f, 0.0f, 18.4f),
+        glm::vec3(-12.0f, 0.0f, 0.0f),
+        glm::vec3(12.0f, 0.0f, -1.4f)
+    };
+    for (std::size_t index = 0; index < extraTreePositions.size(); ++index)
+    {
+        addZoneOneProp("zone-one-extra-tree-" + std::to_string(index), treePath, extraTreePositions[index], 18.0f + static_cast<float>(index) * 37.0f, 5.3f + static_cast<float>(index % 3) * 0.45f, true, true);
+    }
+
+    const std::array<glm::vec3, 14> bushPositions {
+        glm::vec3(-8.7f, -0.35f, 18.1f), glm::vec3(7.9f, -0.35f, 17.2f),
+        glm::vec3(-9.2f, -0.35f, 11.9f), glm::vec3(8.5f, -0.35f, 10.7f),
+        glm::vec3(-7.9f, -0.35f, 4.6f), glm::vec3(9.4f, -0.35f, 2.8f),
+        glm::vec3(-10.4f, -0.35f, -3.0f), glm::vec3(8.9f, -0.35f, -6.2f),
+        glm::vec3(-9.7f, -0.35f, -12.8f), glm::vec3(6.8f, -0.35f, -16.8f),
+        glm::vec3(-4.9f, -0.35f, 14.5f), glm::vec3(5.0f, -0.35f, 12.0f),
+        glm::vec3(-6.4f, -0.35f, -18.0f), glm::vec3(11.4f, -0.35f, 13.1f)
+    };
+    for (std::size_t index = 0; index < bushPositions.size(); ++index)
+    {
+        const fs::path& path = (index % 3u == 0u) ? bushBerry : ((index % 3u == 1u) ? bushA : bushB);
+        addZoneOneProp("zone-one-bush-" + std::to_string(index), path, bushPositions[index], -35.0f + static_cast<float>(index) * 23.0f, 1.25f + static_cast<float>(index % 4u) * 0.13f, true, true);
+    }
+
+    auto hash01 = [](int index, int salt)
+    {
+        std::uint32_t value = static_cast<std::uint32_t>(index * 747796405u + salt * 2891336453u + 0x9e3779b9u);
+        value = ((value >> ((value >> 28u) + 4u)) ^ value) * 277803737u;
+        value = (value >> 22u) ^ value;
+        return static_cast<float>(value & 0x00ffffffu) / static_cast<float>(0x00ffffffu);
+    };
+
+    auto randomRange = [&](int index, int salt, float minValue, float maxValue)
+    {
+        return minValue + ((maxValue - minValue) * hash01(index, salt));
+    };
+
+    auto addOrganicCandidates = [&](const std::string& prefix, const fs::path& pathA, const fs::path& pathB, int attempts, int targetCount, float clearance, float minSeparation, float minSize, float maxSize, bool normalizeToHeight, bool collides)
+    {
+        std::vector<glm::vec2> accepted;
+        accepted.reserve(static_cast<std::size_t>(targetCount));
+        for (int attempt = 0; attempt < attempts && static_cast<int>(accepted.size()) < targetCount; ++attempt)
+        {
+            const float x = randomRange(attempt, static_cast<int>(prefix.size()) + 11, -12.2f, 12.2f);
+            const float z = randomRange(attempt, static_cast<int>(prefix.size()) + 47, -18.8f, 19.8f);
+            const glm::vec3 position(x, 0.0f, z);
+            if (!IsZoneOnePropCandidateSafe(position, clearance))
+            {
+                continue;
+            }
+
+            bool separated = true;
+            for (const glm::vec2& placed : accepted)
+            {
+                if (glm::length(placed - glm::vec2(x, z)) < minSeparation)
+                {
+                    separated = false;
+                    break;
+                }
+            }
+            if (!separated)
+            {
+                continue;
+            }
+
+            accepted.push_back(glm::vec2(x, z));
+            const fs::path& path = (hash01(attempt, 91) < 0.5f) ? pathA : pathB;
+            addZoneOneProp(
+                prefix + std::to_string(accepted.size()),
+                path,
+                position,
+                randomRange(attempt, 123, 0.0f, 360.0f),
+                randomRange(attempt, 211, minSize, maxSize),
+                normalizeToHeight,
+                collides);
+        }
+    };
+
+    addOrganicCandidates("organic-grass-", grassA, grassB, 180, 64, 0.85f, 0.55f, 0.30f, 0.72f, true, false);
+    addOrganicCandidates("organic-flower-", flowerPath, flowerPath, 110, 28, 1.05f, 0.75f, 0.24f, 0.42f, true, false);
+    addOrganicCandidates("organic-mushroom-", mushroomA, mushroomB, 90, 20, 1.15f, 1.05f, 0.20f, 0.38f, true, false);
+    addOrganicCandidates("organic-bush-", bushA, bushBerry, 90, 22, 2.00f, 2.05f, 0.95f, 1.55f, true, true);
+    addOrganicCandidates("organic-rock-", rockA, rockB, 70, 12, 2.35f, 2.25f, 0.80f, 1.35f, false, true);
+    addOrganicCandidates("organic-tree-", treePath, treePath, 80, 12, 3.15f, 3.10f, 4.40f, 6.20f, true, true);
+
+    const std::array<glm::vec3, 24> grassPositions {
+        glm::vec3(-10.8f, 0.0f, 19.0f), glm::vec3(-6.4f, 0.0f, 18.6f), glm::vec3(6.8f, 0.0f, 19.0f), glm::vec3(11.0f, 0.0f, 16.4f),
+        glm::vec3(-11.4f, 0.0f, 13.8f), glm::vec3(-5.7f, 0.0f, 12.7f), glm::vec3(5.8f, 0.0f, 11.2f), glm::vec3(10.8f, 0.0f, 9.7f),
+        glm::vec3(-12.0f, 0.0f, 6.2f), glm::vec3(-6.8f, 0.0f, 5.0f), glm::vec3(6.6f, 0.0f, 4.8f), glm::vec3(11.8f, 0.0f, 3.5f),
+        glm::vec3(-10.5f, 0.0f, -1.5f), glm::vec3(-5.4f, 0.0f, -2.8f), glm::vec3(5.3f, 0.0f, -4.2f), glm::vec3(10.9f, 0.0f, -5.2f),
+        glm::vec3(-11.7f, 0.0f, -9.4f), glm::vec3(-6.9f, 0.0f, -10.6f), glm::vec3(6.0f, 0.0f, -11.0f), glm::vec3(11.5f, 0.0f, -12.8f),
+        glm::vec3(-10.2f, 0.0f, -17.7f), glm::vec3(-5.2f, 0.0f, -18.6f), glm::vec3(5.7f, 0.0f, -18.4f), glm::vec3(10.6f, 0.0f, -18.0f)
+    };
+    for (std::size_t index = 0; index < grassPositions.size(); ++index)
+    {
+        addZoneOneProp("zone-one-grass-" + std::to_string(index), (index % 2u == 0u) ? grassA : grassB, grassPositions[index], static_cast<float>((index * 31u) % 360u), 0.52f + static_cast<float>(index % 5u) * 0.07f, true, false);
+    }
+
+    const std::array<glm::vec3, 15> flowerPositions {
+        glm::vec3(-7.4f, 0.0f, 15.8f), glm::vec3(7.0f, 0.0f, 15.2f), glm::vec3(-9.8f, 0.0f, 7.2f),
+        glm::vec3(9.6f, 0.0f, 6.8f), glm::vec3(-6.2f, 0.0f, 2.0f), glm::vec3(7.7f, 0.0f, 0.2f),
+        glm::vec3(-8.1f, 0.0f, -5.7f), glm::vec3(8.7f, 0.0f, -8.5f), glm::vec3(-10.5f, 0.0f, -14.8f),
+        glm::vec3(6.4f, 0.0f, -14.4f), glm::vec3(10.9f, 0.0f, 12.0f), glm::vec3(-11.4f, 0.0f, 12.9f),
+        glm::vec3(5.0f, 0.0f, 18.6f), glm::vec3(-5.0f, 0.0f, -16.0f), glm::vec3(11.7f, 0.0f, -2.2f)
+    };
+    for (std::size_t index = 0; index < flowerPositions.size(); ++index)
+    {
+        addZoneOneProp("zone-one-flower-" + std::to_string(index), flowerPath, flowerPositions[index], static_cast<float>((index * 47u) % 360u), 0.36f + static_cast<float>(index % 3u) * 0.06f, true, false);
+    }
+
+    const std::array<glm::vec3, 12> mushroomPositions {
+        glm::vec3(-10.9f, 0.0f, 15.0f), glm::vec3(9.1f, 0.0f, 15.7f), glm::vec3(-10.6f, 0.0f, 2.8f),
+        glm::vec3(10.8f, 0.0f, -0.8f), glm::vec3(-9.4f, 0.0f, -8.8f), glm::vec3(9.4f, 0.0f, -13.8f),
+        glm::vec3(-6.5f, 0.0f, 9.4f), glm::vec3(6.8f, 0.0f, 8.7f), glm::vec3(-11.5f, 0.0f, -17.5f),
+        glm::vec3(7.6f, 0.0f, -18.0f), glm::vec3(-8.2f, 0.0f, -1.0f), glm::vec3(11.3f, 0.0f, 18.3f)
+    };
+    for (std::size_t index = 0; index < mushroomPositions.size(); ++index)
+    {
+        addZoneOneProp("zone-one-mushroom-" + std::to_string(index), (index % 2u == 0u) ? mushroomA : mushroomB, mushroomPositions[index], static_cast<float>((index * 29u) % 360u), 0.28f + static_cast<float>(index % 4u) * 0.05f, true, false);
+    }
+
+    auto addDenseCandidate = [&](const std::string& prefix, const fs::path& path, int index, float x, float z, float clearance, float yaw, float targetSize, bool normalizeToHeight, bool collides)
+    {
+        const glm::vec3 position(x, 0.0f, z);
+        if (!IsZoneOnePropCandidateSafe(position, clearance))
+        {
+            return;
+        }
+        addZoneOneProp(prefix + std::to_string(index), path, position, yaw, targetSize, normalizeToHeight, collides);
+    };
+
+    int denseIndex = 0;
+    for (int row = 0; row < 8; ++row)
+    {
+        for (int column = 0; column < 7; ++column)
+        {
+            const float x = -11.8f + static_cast<float>(column) * 3.85f + (row % 2 == 0 ? 0.0f : 1.15f);
+            const float z = -18.2f + static_cast<float>(row) * 5.15f;
+            const float jitterX = (static_cast<float>(((row * 37 + column * 19) % 9)) - 4.0f) * 0.18f;
+            const float jitterZ = (static_cast<float>(((row * 17 + column * 29) % 9)) - 4.0f) * 0.20f;
+            const fs::path& path = ((row + column) % 2 == 0) ? grassA : grassB;
+            addDenseCandidate(
+                "zone-one-dense-grass-",
+                path,
+                denseIndex++,
+                x + jitterX,
+                z + jitterZ,
+                1.35f,
+                static_cast<float>((row * 43 + column * 31) % 360),
+                0.44f + static_cast<float>((row + column) % 4) * 0.08f,
+                true,
+                false);
+        }
+    }
+
+    for (int index = 0; index < 18; ++index)
+    {
+        const float side = (index % 2 == 0) ? -1.0f : 1.0f;
+        const float x = side * (7.2f + static_cast<float>((index * 13) % 5) * 0.82f);
+        const float z = -18.5f + static_cast<float>(index) * 2.25f;
+        const fs::path& path = (index % 3 == 0) ? bushBerry : ((index % 3 == 1) ? bushA : bushB);
+        addDenseCandidate(
+            "zone-one-dense-bush-",
+            path,
+            index,
+            x,
+            z,
+            2.45f,
+            static_cast<float>((index * 41) % 360),
+            1.05f + static_cast<float>(index % 4) * 0.12f,
+            true,
+            true);
+    }
+
+    for (int index = 0; index < 10; ++index)
+    {
+        const float side = (index % 2 == 0) ? -1.0f : 1.0f;
+        const float x = side * (8.8f + static_cast<float>((index * 7) % 4) * 0.75f);
+        const float z = -16.0f + static_cast<float>(index) * 3.6f;
+        addDenseCandidate(
+            "zone-one-dense-rock-",
+            (index % 2 == 0) ? rockA : rockB,
+            index,
+            x,
+            z,
+            2.65f,
+            static_cast<float>((index * 53) % 360),
+            1.0f + static_cast<float>(index % 3) * 0.25f,
+            false,
+            true);
+    }
+
+    for (int index = 0; index < 8; ++index)
+    {
+        const float side = (index % 2 == 0) ? -1.0f : 1.0f;
+        const float x = side * (10.1f + static_cast<float>(index % 3) * 0.72f);
+        const float z = -17.5f + static_cast<float>(index) * 5.0f;
+        addDenseCandidate(
+            "zone-one-dense-tree-",
+            treePath,
+            index,
+            x,
+            z,
+            3.75f,
+            static_cast<float>((index * 67) % 360),
+            4.9f + static_cast<float>(index % 3) * 0.55f,
+            true,
+            true);
+    }
+
+    for (int index = 0; index < 22; ++index)
+    {
+        const float side = (index % 2 == 0) ? -1.0f : 1.0f;
+        const float x = side * (5.5f + static_cast<float>((index * 11) % 6) * 0.82f);
+        const float z = -17.7f + static_cast<float>(index) * 1.8f;
+        addDenseCandidate(
+            "zone-one-dense-flower-",
+            flowerPath,
+            index,
+            x,
+            z,
+            1.5f,
+            static_cast<float>((index * 59) % 360),
+            0.30f + static_cast<float>(index % 3) * 0.04f,
+            true,
+            false);
+    }
+
+    for (int index = 0; index < 16; ++index)
+    {
+        const float side = (index % 2 == 0) ? -1.0f : 1.0f;
+        const float x = side * (7.8f + static_cast<float>((index * 5) % 5) * 0.75f);
+        const float z = -16.8f + static_cast<float>(index) * 2.35f;
+        addDenseCandidate(
+            "zone-one-dense-mushroom-",
+            (index % 2 == 0) ? mushroomA : mushroomB,
+            index,
+            x,
+            z,
+            1.65f,
+            static_cast<float>((index * 71) % 360),
+            0.24f + static_cast<float>(index % 4) * 0.04f,
+            true,
+            false);
+    }
+
+    auto removeNearestDecorationNear = [&](const std::string& typeToken, const glm::vec2& xz, float radius)
+    {
+        const std::string token = ToLowerAscii(typeToken);
+        auto best = decorations.end();
+        float bestDistance = radius;
+        for (auto it = decorations.begin(); it != decorations.end(); ++it)
+        {
+            const std::string lowerName = ToLowerAscii(it->name);
+            const std::string lowerPath = ToLowerAscii(it->path.string());
+            if (lowerName.find(token) == std::string::npos && lowerPath.find(token) == std::string::npos)
+            {
+                continue;
+            }
+
+            const float distance = glm::length(glm::vec2(it->position.x, it->position.z) - xz);
+            if (distance <= bestDistance)
+            {
+                best = it;
+                bestDistance = distance;
+            }
+        }
+
+        if (best != decorations.end())
+        {
+            DebugLog::Info(
+                "BaseScene",
+                "Removed crowded zone-one prop name=", best->name,
+                " near=(", xz.x, ", ", xz.y,
+                ") distance=", bestDistance);
+            decorations.erase(best);
+        }
+    };
+
+    const std::array<glm::vec2, 11> bushCleanupPositions {
+        glm::vec2(-2.0f, 18.0f),
+        glm::vec2(0.98f, 1.41f),
+        glm::vec2(4.88f, -17.44f),
+        glm::vec2(6.51f, -14.42f),
+        glm::vec2(10.24f, -6.34f),
+        glm::vec2(8.32f, 2.95f),
+        glm::vec2(6.09f, 19.78f),
+        glm::vec2(5.10f, 17.85f),
+        glm::vec2(-8.12f, 11.97f),
+        glm::vec2(-12.75f, 13.10f),
+        glm::vec2(-10.80f, 10.77f)
+    };
+    for (const glm::vec2& cleanupPosition : bushCleanupPositions)
+    {
+        removeNearestDecorationNear("bush", cleanupPosition, 1.55f);
+    }
+
+    const std::array<glm::vec2, 3> bushAndRockCleanupPositions {
+        glm::vec2(10.60f, -14.52f),
+        glm::vec2(10.44f, -13.12f),
+        glm::vec2(8.10f, -4.37f)
+    };
+    for (const glm::vec2& cleanupPosition : bushAndRockCleanupPositions)
+    {
+        removeNearestDecorationNear("bush", cleanupPosition, 1.65f);
+        removeNearestDecorationNear("rock", cleanupPosition, 1.65f);
+    }
 
     for (const DecorationDesc& decoration : decorations)
     {
@@ -1149,14 +1817,23 @@ void BaseScene::LoadVegetableValleyDemo()
             decoration.normalizeToHeight,
             true,
             decoration.contributesToCollision);
+        const std::string decorationName(decoration.name);
+        if (decoration.contributesToCollision && BlocksNavigationForEntity(decorationName))
+        {
+            const glm::vec3 halfExtents = BlockerHalfExtentsForEntity(decorationName, decoration.targetSize);
+            if (halfExtents.x > 0.0f)
+            {
+                const glm::vec3 center = decoration.position + glm::vec3(0.0f, halfExtents.y, 0.0f);
+                AddSolidCollider(center, halfExtents);
+            }
+        }
     }
 
-    AddSceneBlocker("bush-left", glm::vec3(-7.2f, 0.55f, 8.6f), glm::vec3(0.95f, 0.65f, 0.95f), 12.0f);
-    AddSceneBlocker("bush-right", glm::vec3(7.3f, 0.55f, 6.0f), glm::vec3(0.85f, 0.65f, 0.85f), -22.0f);
-    AddSceneBlocker("rock-left", glm::vec3(-5.6f, 0.45f, -6.0f), glm::vec3(0.80f, 0.55f, 0.70f), 35.0f);
-    AddSceneBlocker("rock-right", glm::vec3(5.7f, 0.45f, -9.0f), glm::vec3(0.85f, 0.55f, 0.70f), -30.0f);
-    AddSceneBlocker("wooden-sign", glm::vec3(-2.8f, 0.75f, 15.5f), glm::vec3(0.65f, 0.85f, 0.35f), 28.0f);
     AddSceneBlocker("whispy-trunk", whispyPosition_ + glm::vec3(0.0f, 1.55f, 0.0f), glm::vec3(1.95f, 1.95f, 1.85f), 0.0f);
+    AddSolidCollider(whispyPosition_ + glm::vec3(0.0f, 1.55f, 0.0f), glm::vec3(1.95f, 1.95f, 1.85f));
+    AddCollectibleStar("portal-dummy-star", portalPropPosition_);
+    AddCollectibleStar("hidden-valley-star", hiddenStarPosition_);
+    AddCollectibleStar("parkour-star", parkourStarPosition_);
 
     DebugLog::Info(
         "BaseScene",
@@ -1171,7 +1848,7 @@ void BaseScene::ConfigureSceneLights()
     ReleasePointLightShadowMaps();
     pointLights_.clear();
 
-    auto addPointLight = [&](const std::string& label, const glm::vec3& position, const glm::vec3& color, float intensity, float range)
+    auto addPointLight = [&](const std::string& label, const glm::vec3& position, const glm::vec3& color, float intensity, float range, SceneZone ownerZone, bool visibleAcrossZones = false)
     {
         PointLight pointLight;
         pointLight.label = label;
@@ -1179,6 +1856,8 @@ void BaseScene::ConfigureSceneLights()
         pointLight.color = color;
         pointLight.intensity = intensity;
         pointLight.range = range;
+        pointLight.ownerZone = ownerZone;
+        pointLight.visibleAcrossZones = visibleAcrossZones;
         pointLights_.push_back(pointLight);
     };
 
@@ -1187,12 +1866,11 @@ void BaseScene::ConfigureSceneLights()
     ambientSkyColor_ = glm::vec3(0.22f, 0.29f, 0.38f);
     ambientGroundColor_ = glm::vec3(0.08f, 0.12f, 0.08f);
 
-    addPointLight("portal-star", portalPropPosition_ + glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f, 0.86f, 0.38f), 2.4f, 7.0f);
-    addPointLight("zone-two-entry", glm::vec3(62.0f, 1.8f, 14.0f), glm::vec3(0.42f, 0.72f, 1.0f), 2.8f, 8.0f);
-    addPointLight("zone-two-step-a", glm::vec3(65.0f, 2.2f, 8.8f), glm::vec3(0.60f, 0.88f, 1.0f), 2.3f, 6.5f);
-    addPointLight("zone-two-step-b", glm::vec3(68.5f, 2.8f, 3.8f), glm::vec3(0.80f, 0.74f, 1.0f), 2.3f, 6.5f);
-    addPointLight("zone-two-summit", glm::vec3(70.0f, 5.1f, -15.5f), glm::vec3(1.0f, 0.76f, 0.35f), 3.0f, 9.0f);
-    addPointLight("whispy-final-star", finalStarBasePosition_ + glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(1.0f, 0.72f, 0.26f), 1.8f, 8.0f);
+    parkourGuideLightPosition_ = glm::vec3(65.0f, 2.45f, 8.8f);
+    parkourGuideLightTarget_ = parkourGuideLightPosition_;
+    parkourGuideLightInitialized_ = false;
+    addPointLight("parkour-guide", parkourGuideLightPosition_, glm::vec3(1.0f, 0.78f, 0.36f), 0.0f, 7.4f, SceneZone::Parkour, true);
+    addPointLight("whispy-summit", glm::vec3(70.0f, 5.1f, -15.5f), glm::vec3(1.0f, 0.76f, 0.35f), 3.0f, 9.0f, SceneZone::Whispy);
 
     const std::size_t shadowCastingPointLights = static_cast<std::size_t>(std::count_if(
         pointLights_.begin(),
@@ -1289,6 +1967,7 @@ void BaseScene::AddSceneBlocker(
     blocker.yawDegrees = yawDegrees;
     blocker.enabled = true;
     sceneBlockers_.push_back(std::move(blocker));
+    AddSolidCollider(center, halfExtents);
 }
 
 void BaseScene::AddPrimitivePlatform(
@@ -1303,6 +1982,370 @@ void BaseScene::AddPrimitivePlatform(
     platform.size = size;
     platform.color = color;
     platforms_.push_back(std::move(platform));
+    AddZoneTwoWalkableSurface(name, center, size * 0.5f);
+    AddSolidCollider(center, size * 0.5f);
+}
+
+void BaseScene::AddZoneTwoWalkableSurface(const std::string& name, const glm::vec3& center, const glm::vec3& halfExtents)
+{
+    zoneTwoWalkableSurfaces_.push_back(PlayerWalkableSurface { name, center, halfExtents });
+}
+
+void BaseScene::AddSolidCollider(const glm::vec3& center, const glm::vec3& halfExtents)
+{
+    solidColliders_.push_back(CameraSolidCollider { center, halfExtents, true });
+}
+
+void BaseScene::AddCollectibleStar(const std::string& entityName, const glm::vec3& position)
+{
+    collectibleStars_.push_back(CollectibleStar { entityName, position, false });
+}
+
+BaseScene::SceneZone BaseScene::DetermineZone(const glm::vec3& position) const
+{
+    if (position.x < 48.0f)
+    {
+        return SceneZone::Entrance;
+    }
+    if (glm::length(glm::vec2(position.x, position.z) - glm::vec2(whispyPosition_.x, whispyPosition_.z)) < 7.4f)
+    {
+        return SceneZone::Whispy;
+    }
+    return SceneZone::Parkour;
+}
+
+const BaseScene::CollectibleStar* BaseScene::FindCollectibleStar(const std::string& entityName) const
+{
+    const auto found = std::find_if(
+        collectibleStars_.begin(),
+        collectibleStars_.end(),
+        [&entityName](const CollectibleStar& star)
+        {
+            return star.entityName == entityName;
+        });
+    return found == collectibleStars_.end() ? nullptr : &(*found);
+}
+
+BaseScene::CollectibleStar* BaseScene::FindCollectibleStar(const std::string& entityName)
+{
+    auto found = std::find_if(
+        collectibleStars_.begin(),
+        collectibleStars_.end(),
+        [&entityName](const CollectibleStar& star)
+        {
+            return star.entityName == entityName;
+        });
+    return found == collectibleStars_.end() ? nullptr : &(*found);
+}
+
+bool BaseScene::IsCollectibleVisible(const std::string& entityName) const
+{
+    if (const CollectibleStar* star = FindCollectibleStar(entityName))
+    {
+        return !star->collected;
+    }
+    return true;
+}
+
+void BaseScene::ShowTimedMessage(const std::string& text, float seconds, int priority)
+{
+    if (timedMessage_.remainingTime > 0.0f && timedMessage_.priority > priority && timedMessage_.text != text)
+    {
+        return;
+    }
+    timedMessage_ = TimedMessage { text, seconds, priority };
+}
+
+void BaseScene::RebuildContextMessage(const PlayerSnapshot& player)
+{
+    contextMessage_.clear();
+    const float distanceToPortalStar = glm::length(player.position - portalPropPosition_);
+    const float distanceToPortal = glm::length(player.position - portalPosition_);
+    const float distanceToWhispy = glm::length(glm::vec2(player.position.x, player.position.z) - glm::vec2(whispyPosition_.x, whispyPosition_.z));
+
+    if (!portalStarCollected_ && distanceToPortalStar < 3.2f)
+    {
+        contextMessage_ = "PRESIONA E PARA RECOGER LA ESTRELLA";
+    }
+    else if (distanceToPortal < 4.0f && !portalStarCollected_)
+    {
+        contextMessage_ = "RECOGE LA ESTRELLA PARA ACTIVAR EL PORTAL";
+    }
+    else if (distanceToPortal < 4.0f && portalStarCollected_ && !portalActivated_)
+    {
+        contextMessage_ = "PRESIONA E PARA ACTIVAR EL PORTAL";
+    }
+
+    for (const CollectibleStar& star : collectibleStars_)
+    {
+        if (star.collected || star.entityName == "portal-dummy-star")
+        {
+            continue;
+        }
+        if (glm::length(player.position - star.position) < 3.0f)
+        {
+            contextMessage_ = "PRESIONA E PARA RECOGER LA ESTRELLA";
+            return;
+        }
+    }
+
+    if (whispyState_ != WhispyState::Defeated && currentZone_ == SceneZone::Whispy && distanceToWhispy < 9.0f)
+    {
+        contextMessage_ = "PRESIONA E PARA INTERACTUAR CON WHISPY WOODS";
+    }
+}
+
+void BaseScene::HandleZoneTwoFall()
+{
+    lastFallRespawnTime_ = absoluteTimeSeconds_;
+    ApplyPlayerDamage("INTENTALO DE NUEVO", true);
+    DebugLog::Info("BaseScene", "Zone two fall respawn lives=", lives_);
+}
+
+void BaseScene::TriggerDamageFlash()
+{
+    damageFlashTimer_ = damageFlashDuration_;
+}
+
+bool BaseScene::ApplyPlayerDamage(const std::string& message, bool preserveProgress)
+{
+    if (gameOverPendingReset_)
+    {
+        return false;
+    }
+
+    lives_ = std::max(0, lives_ - 1);
+    damageCooldownTimer_ = 1.2f;
+    TriggerDamageFlash();
+    pendingTeleportYawDegrees_ = playerSpawnYawDegrees_;
+    if (lives_ <= 0)
+    {
+        ShowTimedMessage("GAME OVER", 3.2f, 12);
+        gameOverPendingReset_ = true;
+        gameOverStartTime_ = absoluteTimeSeconds_;
+    }
+    else
+    {
+        pendingTeleportPosition_ = playerSpawnPosition_;
+        portalActivated_ = false;
+        portalOpen_ = false;
+        portalKeyframeActive_ = false;
+        portalTeleportConsumed_ = false;
+        portalTeleportPending_ = true;
+        ShowTimedMessage(message, 2.8f, 9);
+    }
+
+    if (!preserveProgress)
+    {
+        portalStarCollected_ = false;
+        stars_ = 0;
+        for (CollectibleStar& star : collectibleStars_)
+        {
+            star.collected = false;
+        }
+    }
+    shadowMapDirty_ = true;
+    pointShadowMapsDirty_ = true;
+    DebugLog::Info("BaseScene", "Player damage message=", message, " lives=", lives_);
+    return true;
+}
+
+void BaseScene::UpdateContactDamage(const PlayerSnapshot& player)
+{
+    if (damageCooldownTimer_ > 0.0f || portalTeleportPending_ || gameOverPendingReset_)
+    {
+        return;
+    }
+
+    const glm::vec2 playerXZ(player.position.x, player.position.z);
+    if (currentZone_ == SceneZone::Entrance
+        && glm::length(playerXZ - glm::vec2(chickenPosition_.x, chickenPosition_.z)) < 1.35f
+        && std::abs(player.position.y - chickenPosition_.y) < 1.8f)
+    {
+        ApplyPlayerDamage("NO TOQUES AL POLLO", true);
+        return;
+    }
+
+    if (player.position.x > 48.0f
+        && glm::length(player.position - batPosition_) < 1.65f)
+    {
+        ApplyPlayerDamage("NO TOQUES AL MURCIELAGO", true);
+        return;
+    }
+
+    if (whispyState_ != WhispyState::Defeated
+        && whispyState_ != WhispyState::Defeating
+        && glm::length(playerXZ - glm::vec2(whispyPosition_.x, whispyPosition_.z)) < 2.45f
+        && player.position.y >= whispyPosition_.y - 0.15f
+        && player.position.y < whispyPosition_.y + 4.2f)
+    {
+        ApplyPlayerDamage("WHISPY TE HA GOLPEADO", true);
+    }
+}
+
+float BaseScene::GetDamageFlashAlpha() const noexcept
+{
+    if (gameOverPendingReset_)
+    {
+        return 0.46f;
+    }
+    if (damageFlashDuration_ <= 0.0f || damageFlashTimer_ <= 0.0f)
+    {
+        return 0.0f;
+    }
+    const float progress = std::clamp(damageFlashTimer_ / damageFlashDuration_, 0.0f, 1.0f);
+    return progress * 0.36f;
+}
+
+bool BaseScene::FindZoneTwoSurfaceGuidePosition(const std::string& surfaceName, glm::vec3& position) const
+{
+    for (const PlayerWalkableSurface& surface : zoneTwoWalkableSurfaces_)
+    {
+        if (surface.name != surfaceName)
+        {
+            continue;
+        }
+
+        position = surface.center + glm::vec3(0.0f, surface.halfExtents.y + 1.75f, 0.0f);
+        return true;
+    }
+    return false;
+}
+
+void BaseScene::UpdateParkourGuideLight(const PlayerSnapshot& player, float deltaTimeSeconds)
+{
+    PointLight* guideLight = nullptr;
+    for (PointLight& pointLight : pointLights_)
+    {
+        if (pointLight.label == "parkour-guide")
+        {
+            guideLight = &pointLight;
+            break;
+        }
+    }
+    if (guideLight == nullptr)
+    {
+        return;
+    }
+
+    auto resetGuideLight = [&]()
+    {
+        glm::vec3 firstStepPosition = parkourGuideLightPosition_;
+        if (FindZoneTwoSurfaceGuidePosition("zone-two-step-a", firstStepPosition))
+        {
+            parkourGuideLightTarget_ = firstStepPosition;
+        }
+        parkourGuideLightPosition_ = parkourGuideLightTarget_;
+        parkourGuideLightInitialized_ = false;
+        lastParkourGuideSurface_.clear();
+        guideLight->position = parkourGuideLightPosition_;
+        guideLight->intensity = 0.0f;
+    };
+
+    if (currentZone_ == SceneZone::Entrance)
+    {
+        resetGuideLight();
+        return;
+    }
+
+    if (!player.supportSurfaceName.empty())
+    {
+        lastParkourGuideSurface_ = player.supportSurfaceName;
+    }
+    std::string currentSurface = lastParkourGuideSurface_.empty()
+        ? "zone-two-start-platform"
+        : lastParkourGuideSurface_;
+    std::string nextSurface = "zone-two-step-a";
+    if (currentSurface == "zone-two-step-a")
+    {
+        nextSurface = "zone-two-step-b";
+    }
+    else if (currentSurface == "zone-two-step-b")
+    {
+        nextSurface = "zone-two-step-c";
+    }
+    else if (currentSurface == "zone-two-step-c")
+    {
+        nextSurface = "zone-two-step-d";
+    }
+    else if (currentSurface == "zone-two-step-d")
+    {
+        nextSurface = "zone-two-step-e";
+    }
+    else if (currentSurface == "zone-two-step-e")
+    {
+        nextSurface = "zone-two-step-f";
+    }
+    else if (currentSurface == "zone-two-step-f")
+    {
+        nextSurface = "zone-two-step-g";
+    }
+    else if (currentSurface == "zone-two-step-g")
+    {
+        nextSurface = "zone-two-final-approach";
+    }
+    else if (currentSurface == "zone-two-final-approach")
+    {
+        nextSurface = "zone-two-summit";
+    }
+    else if (currentSurface == "zone-two-summit")
+    {
+        nextSurface.clear();
+    }
+
+    glm::vec3 targetPosition = whispyPosition_ + glm::vec3(0.0f, 2.2f, 3.5f);
+    if (!nextSurface.empty())
+    {
+        const bool foundTargetSurface = FindZoneTwoSurfaceGuidePosition(nextSurface, targetPosition);
+        (void)foundTargetSurface;
+    }
+    parkourGuideLightTarget_ = targetPosition;
+
+    if (!parkourGuideLightInitialized_)
+    {
+        parkourGuideLightPosition_ = parkourGuideLightTarget_;
+        parkourGuideLightInitialized_ = true;
+    }
+    else
+    {
+        const float blend = std::clamp(deltaTimeSeconds * 4.5f, 0.0f, 1.0f);
+        parkourGuideLightPosition_ = glm::mix(parkourGuideLightPosition_, parkourGuideLightTarget_, blend);
+    }
+
+    const float pulse = 0.5f + (0.5f * std::sin(absoluteTimeSeconds_ * 4.0f));
+    guideLight->position = parkourGuideLightPosition_;
+    guideLight->intensity = 2.4f + (pulse * 0.55f);
+    guideLight->range = 7.4f;
+    guideLight->color = glm::vec3(1.0f, 0.78f, 0.36f);
+}
+
+void BaseScene::ResetGameState(bool resetLives)
+{
+    stars_ = 0;
+    if (resetLives)
+    {
+        lives_ = 3;
+    }
+    portalStarCollected_ = false;
+    portalActivated_ = false;
+    portalOpen_ = false;
+    portalKeyframeActive_ = false;
+    portalTeleportConsumed_ = false;
+    gameOverPendingReset_ = false;
+    gameOverStartTime_ = -100.0f;
+    damageFlashTimer_ = 0.0f;
+    damageCooldownTimer_ = 0.0f;
+    parkourGuideLightInitialized_ = false;
+    lastParkourGuideSurface_.clear();
+    finalZoneActivated_ = false;
+    whispyState_ = WhispyState::Idle;
+    whispyDefeatStartTime_ = -100.0f;
+    for (CollectibleStar& star : collectibleStars_)
+    {
+        star.collected = false;
+    }
+    shadowMapDirty_ = true;
+    pointShadowMapsDirty_ = true;
 }
 
 void BaseScene::SetupPlacement(
@@ -1348,8 +2391,38 @@ void BaseScene::SetupPlacement(
 
 glm::mat4 BaseScene::BuildStaticModelMatrix(const SceneEntity& entity) const
 {
-    glm::mat4 model = glm::translate(glm::mat4(1.0f), entity.worldPosition);
-    model = glm::rotate(model, glm::radians(entity.worldYawDegrees + entity.placement.yawOffsetDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::vec3 position = entity.worldPosition;
+    const std::string lowerName = ToLowerAscii(entity.name);
+    float extraYawDegrees = 0.0f;
+    float extraRollDegrees = 0.0f;
+    const bool collectibleVisible = IsCollectibleVisible(entity.name);
+    if (collectibleVisible && IsStarEntity(entity.name))
+    {
+        position.y += std::sin(absoluteTimeSeconds_ * 2.4f) * 0.18f;
+    }
+    else if (lowerName == "zone-two-bat")
+    {
+        position.y += std::sin(absoluteTimeSeconds_ * 2.8f) * 0.22f;
+        extraYawDegrees = std::sin(absoluteTimeSeconds_ * 1.7f) * 5.0f;
+        extraRollDegrees = std::sin(absoluteTimeSeconds_ * 3.2f) * 3.5f;
+    }
+    else if (lowerName == "zone-one-black-chick")
+    {
+        position.y += std::sin(absoluteTimeSeconds_ * 3.4f) * 0.035f;
+        extraYawDegrees = std::sin(absoluteTimeSeconds_ * 1.3f) * 4.0f;
+    }
+
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
+    model = glm::rotate(model, glm::radians(entity.worldYawDegrees + entity.placement.yawOffsetDegrees + extraYawDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
+    if (std::abs(extraRollDegrees) > 0.001f)
+    {
+        model = glm::rotate(model, glm::radians(extraRollDegrees), glm::vec3(0.0f, 0.0f, 1.0f));
+    }
+    if (collectibleVisible && IsStarEntity(entity.name))
+    {
+        model = glm::rotate(model, absoluteTimeSeconds_ * 1.9f, glm::vec3(0.0f, 1.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    }
     model = glm::scale(model, glm::vec3(entity.placement.scale));
     model = glm::translate(model, entity.placement.rawOffset);
     return model;
@@ -1385,6 +2458,7 @@ glm::mat4 BaseScene::BuildKirbyModelMatrix() const
     glm::vec3 position = latestPlayer_.position;
     float scaleMultiplier = 1.0f;
     float extraYawDegrees = 0.0f;
+    float extraRollDegrees = 0.0f;
 
     if (kirbyKeyframeActive_)
     {
@@ -1393,9 +2467,22 @@ glm::mat4 BaseScene::BuildKirbyModelMatrix() const
         scaleMultiplier = sample.scale;
         extraYawDegrees = sample.extraYawDegrees;
     }
+    else
+    {
+        const float movementAmount = std::clamp(latestPlayer_.horizontalSpeed / 4.0f, 0.0f, 1.0f);
+        const float idleBreath = 1.0f + (std::sin(absoluteTimeSeconds_ * 2.2f) * 0.012f);
+        const float walkBob = std::sin(absoluteTimeSeconds_ * 8.0f) * 0.045f * movementAmount;
+        position.y += walkBob + (std::sin(absoluteTimeSeconds_ * 2.0f) * 0.015f * (1.0f - movementAmount));
+        scaleMultiplier *= idleBreath;
+        extraRollDegrees = std::sin(absoluteTimeSeconds_ * 8.0f) * 2.5f * movementAmount;
+    }
 
     glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
     model = glm::rotate(model, glm::radians(latestPlayer_.facingYawDegrees + kirbyPlacement_.yawOffsetDegrees + extraYawDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
+    if (std::abs(extraRollDegrees) > 0.001f)
+    {
+        model = glm::rotate(model, glm::radians(extraRollDegrees), glm::vec3(0.0f, 0.0f, 1.0f));
+    }
     model = glm::scale(model, glm::vec3(kirbyPlacement_.scale * scaleMultiplier));
     model = glm::translate(model, kirbyPlacement_.rawOffset);
     return model;
@@ -1403,11 +2490,24 @@ glm::mat4 BaseScene::BuildKirbyModelMatrix() const
 
 glm::mat4 BaseScene::BuildWhispyFbxModelMatrix() const
 {
+    const float defeatProgress = WhispyDefeatProgress();
+    const float easedDefeat = defeatProgress * defeatProgress * (3.0f - (2.0f * defeatProgress));
+    const float defeatScale = glm::mix(1.0f, 0.02f, easedDefeat);
+    const float defeatYaw = easedDefeat * 720.0f;
     glm::mat4 model = glm::translate(glm::mat4(1.0f), whispyPosition_);
-    model = glm::rotate(model, glm::radians(360.0f + whispyFbxPlacement_.yawOffsetDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
-    model = glm::scale(model, glm::vec3(whispyFbxPlacement_.scale));
+    model = glm::rotate(model, glm::radians(360.0f + whispyFbxPlacement_.yawOffsetDegrees + defeatYaw), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::scale(model, glm::vec3(whispyFbxPlacement_.scale * defeatScale));
     model = glm::translate(model, whispyFbxPlacement_.rawOffset);
     return model;
+}
+
+float BaseScene::WhispyDefeatProgress() const noexcept
+{
+    if (whispyState_ != WhispyState::Defeating)
+    {
+        return whispyState_ == WhispyState::Defeated ? 1.0f : 0.0f;
+    }
+    return std::clamp((absoluteTimeSeconds_ - whispyDefeatStartTime_) / std::max(whispyDefeatDuration_, 0.001f), 0.0f, 1.0f);
 }
 
 BaseScene::KeyframeSample BaseScene::SampleKirbyEntranceKeyframes(float elapsedSeconds) const
@@ -1496,11 +2596,11 @@ BaseScene::KeyframeSample BaseScene::SamplePortalKeyframes(float elapsedSeconds)
 BaseScene::KeyframeSample BaseScene::SampleAppleFallKeyframes(float elapsedSeconds) const
 {
     const std::array<KeyframeSample, 5> keyframes {
-        KeyframeSample { 0.00f, glm::vec3(0.65f, 5.60f, 0.42f), 0.42f, 0.0f },
-        KeyframeSample { 0.35f, glm::vec3(0.85f, 4.15f, 0.50f), 0.46f, 80.0f },
-        KeyframeSample { 0.85f, glm::vec3(0.40f, 2.05f, 0.60f), 0.44f, 210.0f },
-        KeyframeSample { 1.25f, glm::vec3(0.75f, 0.55f, 0.70f), 0.48f, 330.0f },
-        KeyframeSample { 1.70f, glm::vec3(0.95f, 0.38f, 0.75f), 0.43f, 420.0f }
+        KeyframeSample { 0.00f, glm::vec3(0.85f, 5.60f, 2.05f), 0.42f, 0.0f },
+        KeyframeSample { 0.35f, glm::vec3(1.05f, 4.15f, 2.20f), 0.46f, 80.0f },
+        KeyframeSample { 0.85f, glm::vec3(0.72f, 2.05f, 2.35f), 0.44f, 210.0f },
+        KeyframeSample { 1.25f, glm::vec3(1.05f, 0.55f, 2.50f), 0.48f, 330.0f },
+        KeyframeSample { 1.70f, glm::vec3(1.25f, 0.38f, 2.60f), 0.43f, 420.0f }
     };
 
     if (elapsedSeconds <= keyframes.front().time)
@@ -1825,6 +2925,10 @@ void BaseScene::DrawShadowCasters(const ShaderProgram& shader) const
         {
             continue;
         }
+        if (!IsCollectibleVisible(entity.name))
+        {
+            continue;
+        }
         if (zoneTwoViewThisFrame_ && entity.worldPosition.x < 48.0f)
         {
             continue;
@@ -1847,7 +2951,7 @@ void BaseScene::DrawShadowCasters(const ShaderProgram& shader) const
         door.placement.model->DrawWithoutTextures();
     }
 
-    if (whispyFbxPreviewEnabled_ && whispyFbxPlacement_.model != nullptr)
+    if (whispyState_ != WhispyState::Defeated && whispyFbxPreviewEnabled_ && whispyFbxPlacement_.model != nullptr)
     {
         shader.SetBool("useTexture", false);
         shader.SetMat4("model", BuildWhispyFbxModelMatrix());
@@ -1895,19 +2999,6 @@ void BaseScene::DrawColoredMesh(
 
 void BaseScene::DrawVegetableValleyPrimitives() const
 {
-    if (lightMarkerMesh_ == nullptr)
-    {
-        return;
-    }
-
-    const float starBob = std::sin(absoluteTimeSeconds_ * 2.4f) * 0.18f;
-    const float finalLift = finalZoneActivated_
-        ? std::clamp((absoluteTimeSeconds_ - finalActivationTime_) * 1.2f, 0.0f, 1.0f) * 2.0f
-        : 0.0f;
-    glm::mat4 finalStar = glm::translate(glm::mat4(1.0f), finalStarBasePosition_ + glm::vec3(0.0f, starBob + finalLift, 0.0f));
-    finalStar = glm::rotate(finalStar, absoluteTimeSeconds_ * 1.8f, glm::vec3(0.0f, 1.0f, 0.0f));
-    finalStar = glm::scale(finalStar, glm::vec3(finalZoneActivated_ ? 1.35f : 0.95f));
-    DrawColoredMesh(*lightMarkerMesh_, finalStar, finalZoneActivated_ ? glm::vec3(1.0f, 0.76f, 0.20f) : glm::vec3(1.0f, 0.92f, 0.38f), 0.25f, 0.18f, 1.0f);
 }
 
 void BaseScene::DrawWhispyProcedural() const
@@ -1916,10 +3007,19 @@ void BaseScene::DrawWhispyProcedural() const
     {
         return;
     }
+    if (whispyState_ == WhispyState::Defeated)
+    {
+        return;
+    }
 
     const float sway = std::sin(absoluteTimeSeconds_ * 1.4f) * 3.0f;
+    const float defeatProgress = WhispyDefeatProgress();
+    const float easedDefeat = defeatProgress * defeatProgress * (3.0f - (2.0f * defeatProgress));
+    const float defeatScale = glm::mix(1.0f, 0.02f, easedDefeat);
+    const float defeatYaw = easedDefeat * 720.0f;
     const glm::mat4 root = glm::translate(glm::mat4(1.0f), whispyPosition_)
-        * glm::rotate(glm::mat4(1.0f), glm::radians(sway), glm::vec3(0.0f, 1.0f, 0.0f));
+        * glm::rotate(glm::mat4(1.0f), glm::radians(sway + defeatYaw), glm::vec3(0.0f, 1.0f, 0.0f))
+        * glm::scale(glm::mat4(1.0f), glm::vec3(defeatScale));
 
     auto drawPart = [&](const Mesh& mesh, const glm::mat4& local, const glm::vec3& color, float specular = 0.0f)
     {
@@ -2141,18 +3241,23 @@ void BaseScene::DrawLitGeometry() const
         {
             continue;
         }
+        if (!IsCollectibleVisible(entity.name))
+        {
+            continue;
+        }
         if (zoneTwoViewThisFrame_ && entity.worldPosition.x < 48.0f)
         {
             continue;
         }
 
-        litShader_->SetBool("useTexture", entity.placement.model->HasTextures());
+        const bool useEntityTexture = UseTextureForEntity(entity.name, entity.placement.model->HasTextures());
+        litShader_->SetBool("useTexture", useEntityTexture);
         litShader_->SetFloat("specularStrength", SpecularStrengthForEntity(entity.name));
-        litShader_->SetFloat("unlitFactor", 0.0f);
+        litShader_->SetFloat("unlitFactor", UnlitFactorForEntity(entity.name));
         litShader_->SetFloat("pointLightResponse", 1.0f);
-        litShader_->SetVec3("baseColor", glm::vec3(0.92f, 0.86f, 0.72f));
+        litShader_->SetVec3("baseColor", BaseColorForEntity(entity.name));
         litShader_->SetMat4("model", BuildStaticModelMatrix(entity));
-        if (!entity.placement.model->HasTextures())
+        if (!useEntityTexture)
         {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, dirtTexture_);
@@ -2160,7 +3265,7 @@ void BaseScene::DrawLitGeometry() const
         entity.placement.model->Draw();
     }
 
-    if (whispyFbxPreviewEnabled_ && whispyFbxPlacement_.model != nullptr)
+    if (whispyState_ != WhispyState::Defeated && whispyFbxPreviewEnabled_ && whispyFbxPlacement_.model != nullptr)
     {
         litShader_->SetBool("useTexture", whispyFbxPlacement_.model->HasTextures());
         litShader_->SetFloat("specularStrength", 0.03f);

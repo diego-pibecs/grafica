@@ -25,6 +25,16 @@ public:
     DebugOverlayRenderer& operator=(const DebugOverlayRenderer&) = delete;
 
     void Render(const std::vector<std::string>& lines, int framebufferWidth, int framebufferHeight) const;
+    void RenderFullscreenTint(int framebufferWidth, int framebufferHeight, glm::vec3 color, float alpha) const;
+    void RenderAt(
+        const std::vector<std::string>& lines,
+        int framebufferWidth,
+        int framebufferHeight,
+        glm::vec2 topLeft,
+        float pixelSize,
+        glm::vec3 textColor,
+        float backgroundAlpha,
+        bool centerX = false) const;
 
 private:
     ShaderProgram shader_;

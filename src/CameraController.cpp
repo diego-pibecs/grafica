@@ -8,6 +8,57 @@
 namespace
 {
 constexpr glm::vec3 kWorldUp(0.0f, 1.0f, 0.0f);
+
+bool RayIntersectsAabb(
+    const glm::vec3& origin,
+    const glm::vec3& direction,
+    float maxDistance,
+    const CameraSolidCollider& collider,
+    float& hitDistance)
+{
+    const glm::vec3 minBounds = collider.center - collider.halfExtents;
+    const glm::vec3 maxBounds = collider.center + collider.halfExtents;
+    if (origin.x >= minBounds.x && origin.x <= maxBounds.x
+        && origin.y >= minBounds.y && origin.y <= maxBounds.y
+        && origin.z >= minBounds.z && origin.z <= maxBounds.z)
+    {
+        return false;
+    }
+
+    float tMin = 0.0f;
+    float tMax = maxDistance;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const float rayOrigin = origin[axis];
+        const float rayDirection = direction[axis];
+        const float minValue = minBounds[axis];
+        const float maxValue = maxBounds[axis];
+        if (std::abs(rayDirection) < 0.00001f)
+        {
+            if (rayOrigin < minValue || rayOrigin > maxValue)
+            {
+                return false;
+            }
+            continue;
+        }
+
+        float t1 = (minValue - rayOrigin) / rayDirection;
+        float t2 = (maxValue - rayOrigin) / rayDirection;
+        if (t1 > t2)
+        {
+            std::swap(t1, t2);
+        }
+        tMin = std::max(tMin, t1);
+        tMax = std::min(tMax, t2);
+        if (tMin > tMax)
+        {
+            return false;
+        }
+    }
+
+    hitDistance = tMin;
+    return hitDistance >= 0.0f && hitDistance <= maxDistance;
+}
 }
 
 CameraController::CameraController()
@@ -29,6 +80,11 @@ void CameraController::SetOrbitBounds(const glm::vec3& minBounds, const glm::vec
     orbitBoundsMin_ = minBounds;
     orbitBoundsMax_ = maxBounds;
     hasOrbitBounds_ = true;
+}
+
+void CameraController::SetCollisionColliders(std::vector<CameraSolidCollider> colliders)
+{
+    collisionColliders_ = std::move(colliders);
 }
 
 void CameraController::ToggleMode()
@@ -209,5 +265,50 @@ glm::vec3 CameraController::GetThirdPersonPosition() const
         position.z = std::clamp(position.z, orbitBoundsMin_.z + orbitBoundsMargin_, orbitBoundsMax_.z - orbitBoundsMargin_);
     }
 
-    return position;
+    position = ResolveThirdPersonCollision(position);
+    if (!hasSmoothedThirdPersonPosition_)
+    {
+        smoothedThirdPersonPosition_ = position;
+        hasSmoothedThirdPersonPosition_ = true;
+    }
+    smoothedThirdPersonPosition_ = glm::mix(smoothedThirdPersonPosition_, position, 0.32f);
+    return smoothedThirdPersonPosition_;
+}
+
+glm::vec3 CameraController::ResolveThirdPersonCollision(const glm::vec3& desiredPosition) const
+{
+    const glm::vec3 boom = desiredPosition - orbitTarget_;
+    const float boomDistance = glm::length(boom);
+    if (boomDistance <= 0.0001f || collisionColliders_.empty())
+    {
+        return desiredPosition;
+    }
+
+    const glm::vec3 direction = boom / boomDistance;
+    float nearestHit = boomDistance;
+    bool hit = false;
+    for (const CameraSolidCollider& collider : collisionColliders_)
+    {
+        if (!collider.enabled)
+        {
+            continue;
+        }
+
+        float hitDistance = 0.0f;
+        if (RayIntersectsAabb(orbitTarget_, direction, boomDistance, collider, hitDistance)
+            && hitDistance < nearestHit)
+        {
+            nearestHit = hitDistance;
+            hit = true;
+        }
+    }
+
+    if (!hit)
+    {
+        return desiredPosition;
+    }
+
+    constexpr float kCollisionMargin = 0.38f;
+    constexpr float kMinDistance = 1.35f;
+    return orbitTarget_ + (direction * std::max(nearestHit - kCollisionMargin, kMinDistance));
 }

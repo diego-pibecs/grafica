@@ -4,10 +4,19 @@
 
 #include "InputState.h"
 
+#include <vector>
+
 enum class CameraMode
 {
     Fps,
     ThirdPerson
+};
+
+struct CameraSolidCollider
+{
+    glm::vec3 center { 0.0f };
+    glm::vec3 halfExtents { 0.5f };
+    bool enabled = true;
 };
 
 class CameraController
@@ -18,6 +27,7 @@ public:
     void SetPlayerAnchor(const glm::vec3& anchor);
     void SetOrbitTarget(const glm::vec3& target);
     void SetOrbitBounds(const glm::vec3& minBounds, const glm::vec3& maxBounds);
+    void SetCollisionColliders(std::vector<CameraSolidCollider> colliders);
     void ToggleMode();
     void Update(const InputState& input);
 
@@ -45,6 +55,9 @@ private:
     glm::vec3 orbitBoundsMin_ { -1000.0f, -1000.0f, -1000.0f };
     glm::vec3 orbitBoundsMax_ { 1000.0f, 1000.0f, 1000.0f };
     float orbitBoundsMargin_ = 0.35f;
+    std::vector<CameraSolidCollider> collisionColliders_;
+    mutable glm::vec3 smoothedThirdPersonPosition_ { 0.0f };
+    mutable bool hasSmoothedThirdPersonPosition_ = false;
 
     void UpdateFps(const InputState& input);
     void UpdateThirdPerson(const InputState& input);
@@ -52,4 +65,5 @@ private:
 
     [[nodiscard]] glm::vec3 GetFpsFront() const;
     [[nodiscard]] glm::vec3 GetThirdPersonPosition() const;
+    [[nodiscard]] glm::vec3 ResolveThirdPersonCollision(const glm::vec3& desiredPosition) const;
 };
