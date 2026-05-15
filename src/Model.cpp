@@ -13,6 +13,7 @@
 #include <unordered_set>
 
 #include <assimp/Importer.hpp>
+#include <assimp/config.h>
 #include <assimp/matrix4x4.h>
 #include <assimp/material.h>
 #include <assimp/postprocess.h>
@@ -229,6 +230,79 @@ bool IsKirbySourceName(const std::string& sourceFilename)
 {
     return sourceFilename.find("kirby") != std::string::npos || sourceFilename.find("kirb") != std::string::npos;
 }
+
+struct MatrixDebugInfo
+{
+    glm::vec3 translation { 0.0f };
+    glm::vec3 scale { 1.0f };
+    float determinant = 1.0f;
+    bool finite = true;
+};
+
+MatrixDebugInfo DecomposeMatrixForDebug(const glm::mat4& matrix)
+{
+    MatrixDebugInfo info;
+    info.translation = glm::vec3(matrix[3]);
+    info.scale = glm::vec3(
+        glm::length(glm::vec3(matrix[0])),
+        glm::length(glm::vec3(matrix[1])),
+        glm::length(glm::vec3(matrix[2])));
+    info.determinant = glm::determinant(glm::mat3(matrix));
+    for (int column = 0; column < 4; ++column)
+    {
+        for (int row = 0; row < 4; ++row)
+        {
+            info.finite = info.finite && std::isfinite(matrix[column][row]);
+        }
+    }
+    info.finite = info.finite
+        && std::isfinite(info.scale.x)
+        && std::isfinite(info.scale.y)
+        && std::isfinite(info.scale.z)
+        && std::isfinite(info.determinant);
+    return info;
+}
+
+void LogMatrixDebug(const char* tag, const std::string& label, const glm::mat4& matrix)
+{
+    const MatrixDebugInfo info = DecomposeMatrixForDebug(matrix);
+    DebugLog::Info(
+        tag,
+        label,
+        " T=(",
+        info.translation.x, ", ", info.translation.y, ", ", info.translation.z,
+        ") S=(",
+        info.scale.x, ", ", info.scale.y, ", ", info.scale.z,
+        ") det=", info.determinant,
+        " finite=", info.finite ? "yes" : "no");
+}
+
+const char* SkinningSpaceModeName(Model::SkinningSpaceMode mode)
+{
+    switch (mode)
+    {
+        case Model::SkinningSpaceMode::SceneRootInverse:
+            return "SceneRootInverse";
+        case Model::SkinningSpaceMode::NoGlobalInverse:
+            return "NoGlobalInverse";
+        case Model::SkinningSpaceMode::RootScaleCompensated:
+            return "RootScaleCompensated";
+    }
+    return "Unknown";
+}
+
+float MaxMatrixElementDifference(const glm::mat4& a, const glm::mat4& b)
+{
+    float maxDifference = 0.0f;
+    for (int column = 0; column < 4; ++column)
+    {
+        for (int row = 0; row < 4; ++row)
+        {
+            maxDifference = std::max(maxDifference, std::abs(a[column][row] - b[column][row]));
+        }
+    }
+    return maxDifference;
+}
 }
 
 Model::Model(const std::filesystem::path& path, bool loadTextures)
@@ -278,7 +352,7 @@ void Model::DrawWithoutTextures() const
     }
 }
 
-bool Model::ApplyAnimation(const std::string& preferredClipName, float timeSeconds)
+bool Model::ApplyAnimation(const std::string& preferredClipName, float timeSeconds, SkinningSpaceMode spaceMode)
 {
     if (!HasSkeletalAnimation())
     {
@@ -301,37 +375,60 @@ bool Model::ApplyAnimation(const std::string& preferredClipName, float timeSecon
     const float ticksPerSecond = clip->ticksPerSecond > 0.0f ? clip->ticksPerSecond : 25.0f;
     const float animationTime = std::fmod(timeSeconds * ticksPerSecond, clip->duration);
     std::fill(finalBoneMatrices_.begin(), finalBoneMatrices_.end(), glm::mat4(1.0f));
-    CalculateBoneTransform(rootAnimationNode_, glm::mat4(1.0f), *clip, animationTime);
-    if (clipChanged && IsKirbySourceName(sourceFilename_))
+    CalculateBoneTransform(rootAnimationNode_, glm::mat4(1.0f), *clip, animationTime, spaceMode);
+    if (IsKirbySourceName(sourceFilename_))
     {
-        bool hasBadMatrix = false;
-        float maxAbsValue = 0.0f;
-        const std::size_t matrixCount = std::min<std::size_t>(5u, finalBoneMatrices_.size());
-        for (std::size_t matrixIndex = 0; matrixIndex < matrixCount; ++matrixIndex)
+        if (clipChanged)
         {
-            const glm::mat4& matrix = finalBoneMatrices_[matrixIndex];
-            for (int column = 0; column < 4; ++column)
+            bool hasBadMatrix = false;
+            float maxAbsValue = 0.0f;
+            const std::size_t matrixCount = std::min<std::size_t>(5u, finalBoneMatrices_.size());
+            for (std::size_t matrixIndex = 0; matrixIndex < matrixCount; ++matrixIndex)
             {
-                for (int row = 0; row < 4; ++row)
+                const glm::mat4& matrix = finalBoneMatrices_[matrixIndex];
+                for (int column = 0; column < 4; ++column)
                 {
-                    const float value = matrix[column][row];
-                    hasBadMatrix = hasBadMatrix || !std::isfinite(value);
-                    maxAbsValue = std::max(maxAbsValue, std::abs(value));
+                    for (int row = 0; row < 4; ++row)
+                    {
+                        const float value = matrix[column][row];
+                        hasBadMatrix = hasBadMatrix || !std::isfinite(value);
+                        maxAbsValue = std::max(maxAbsValue, std::abs(value));
+                    }
                 }
+                DebugLog::Info(
+                    "KIRBY ANIM",
+                    "Kirby finalBoneMatrix clip=", clip->name,
+                    " spaceMode=", SkinningSpaceModeName(spaceMode),
+                    " index=", matrixIndex,
+                    " row0=(",
+                    matrix[0][0], ", ", matrix[1][0], ", ", matrix[2][0], ", ", matrix[3][0], ")");
             }
             DebugLog::Info(
-                "ANIM",
-                "Kirby finalBoneMatrix clip=", clip->name,
-                " index=", matrixIndex,
-                " row0=(",
-                matrix[0][0], ", ", matrix[1][0], ", ", matrix[2][0], ", ", matrix[3][0], ")");
+                "KIRBY ANIM",
+                "Kirby runtime diagnostics clip=", clip->name,
+                " spaceMode=", SkinningSpaceModeName(spaceMode),
+                " animationTime=", animationTime,
+                " hasNaNOrInf=", hasBadMatrix ? "yes" : "no",
+                " maxAbsMatrixValue=", maxAbsValue);
         }
-        DebugLog::Info(
-            "ANIM",
-            "Kirby runtime diagnostics clip=", clip->name,
-            " animationTime=", animationTime,
-            " hasNaNOrInf=", hasBadMatrix ? "yes" : "no",
-            " maxAbsMatrixValue=", maxAbsValue);
+        LogKirbyScaleDiagnostics(std::string("Animated ") + clip->name + " " + SkinningSpaceModeName(spaceMode));
+    }
+    return true;
+}
+
+bool Model::ApplyBindPose(SkinningSpaceMode spaceMode)
+{
+    if (!HasSkeletalAnimation())
+    {
+        return false;
+    }
+
+    std::fill(finalBoneMatrices_.begin(), finalBoneMatrices_.end(), glm::mat4(1.0f));
+    CalculateBindPoseTransform(rootAnimationNode_, glm::mat4(1.0f), spaceMode);
+    activeAnimationClip_ = "BindPose";
+    if (IsKirbySourceName(sourceFilename_))
+    {
+        LogKirbyScaleDiagnostics(std::string("BindPose ") + SkinningSpaceModeName(spaceMode));
     }
     return true;
 }
@@ -339,6 +436,12 @@ bool Model::ApplyAnimation(const std::string& preferredClipName, float timeSecon
 void Model::UploadBoneMatrices(const ShaderProgram& shader) const
 {
     shader.SetMat4Array("finalBonesMatrices", finalBoneMatrices_);
+}
+
+void Model::UploadIdentityBoneMatrices(const ShaderProgram& shader) const
+{
+    std::vector<glm::mat4> identityMatrices(finalBoneMatrices_.size(), glm::mat4(1.0f));
+    shader.SetMat4Array("finalBonesMatrices", identityMatrices);
 }
 
 bool Model::IsLoaded() const noexcept
@@ -467,6 +570,46 @@ const std::vector<Model::NodeMarker>& Model::GetNodeMarkers() const noexcept
     return nodeMarkers_;
 }
 
+std::size_t Model::GetMeshCount() const noexcept
+{
+    return meshes_.size();
+}
+
+std::size_t Model::GetAnimationCount() const noexcept
+{
+    return animationCount_;
+}
+
+std::size_t Model::GetBoneCount() const noexcept
+{
+    return boneCount_;
+}
+
+std::size_t Model::GetVertexCount() const noexcept
+{
+    return vertexCount_;
+}
+
+std::size_t Model::GetVerticesWithoutWeights() const noexcept
+{
+    return verticesWithoutWeights_;
+}
+
+std::size_t Model::GetNonUnitWeightVertexCount() const noexcept
+{
+    return nonUnitWeightVertices_;
+}
+
+int Model::GetMaxOriginalInfluences() const noexcept
+{
+    return maxOriginalInfluences_;
+}
+
+std::size_t Model::GetDiscardedInfluenceCount() const noexcept
+{
+    return discardedInfluences_;
+}
+
 void Model::LoadModel(const std::filesystem::path& path)
 {
     DebugLog::ScopedTrace trace("Model", path.string());
@@ -480,23 +623,52 @@ void Model::LoadModel(const std::filesystem::path& path)
     removedDegenerateTriangleCount_ = 0;
     animationCount_ = 0;
     boneCount_ = 0;
+    vertexCount_ = 0;
+    verticesWithoutWeights_ = 0;
+    nonUnitWeightVertices_ = 0;
+    discardedInfluences_ = 0;
+    maxOriginalInfluences_ = 0;
+    kirbyScaleDiagnosticsLogged_ = false;
+    kirbyLoggedScaleLabels_.clear();
     boneCounter_ = 0;
     boneInfoMap_.clear();
+    boneIdsByNodeName_.clear();
+    boneInfosById_.clear();
+    boneNamesById_.clear();
     animationClips_.clear();
     finalBoneMatrices_.assign(static_cast<std::size_t>(kMaxBones), glm::mat4(1.0f));
     activeAnimationClip_.clear();
     boneLimitExceeded_ = false;
 
+    const std::string lowerFilenameForImport = ToLowerAscii(path.filename().string());
     Assimp::Importer importer;
+    if (!loadOptions_.preserveFbxPivots)
+    {
+        importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+    }
+    unsigned int postProcessFlags = aiProcess_Triangulate
+        | aiProcess_FlipUVs
+        | aiProcess_GenSmoothNormals
+        | aiProcess_JoinIdenticalVertices
+        | aiProcess_FindDegenerates
+        | aiProcess_FindInvalidData
+        | aiProcess_LimitBoneWeights
+        | aiProcess_ValidateDataStructure;
+    if (loadOptions_.globalScaleFactor > 0.0f && std::abs(loadOptions_.globalScaleFactor - 1.0f) > 0.0001f)
+    {
+        importer.SetPropertyFloat(AI_CONFIG_GLOBAL_SCALE_FACTOR_KEY, loadOptions_.globalScaleFactor);
+        postProcessFlags |= aiProcess_GlobalScale;
+    }
+    if (IsKirbySourceName(lowerFilenameForImport))
+    {
+        DebugLog::Info(
+            "KIRBY SCALE",
+            "Assimp import options preserveFbxPivots=", loadOptions_.preserveFbxPivots ? "true" : "false",
+            " globalScaleFactor=", loadOptions_.globalScaleFactor,
+            " globalScaleEnabled=", ((postProcessFlags & aiProcess_GlobalScale) != 0u) ? "true" : "false");
+    }
     DebugLog::Info("Model", "ReadFile begin path=", path.string(), " loadTextures=", loadTextures_);
-    const aiScene* scene = importer.ReadFile(
-        path.string(),
-        aiProcess_Triangulate
-            | aiProcess_FlipUVs
-            | aiProcess_GenSmoothNormals
-            | aiProcess_JoinIdenticalVertices
-            | aiProcess_FindDegenerates
-            | aiProcess_FindInvalidData);
+    const aiScene* scene = importer.ReadFile(path.string(), postProcessFlags);
     DebugLog::Info("Model", "ReadFile returned path=", path.string(), " scene=", scene != nullptr);
 
     if (scene == nullptr || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0 || scene->mRootNode == nullptr)
@@ -521,14 +693,17 @@ void Model::LoadModel(const std::filesystem::path& path)
     if (IsKirbySourceName(sourceFilename_))
     {
         DebugLog::Info(
-            "ANIM",
-            "Kirby diagnostics path=", path.string(),
+            "KIRBY DEBUG",
+            "model path=", path.string(),
             " rootNode=", scene->mRootNode != nullptr ? scene->mRootNode->mName.C_Str() : "<null>",
             " globalInverseTransform[3]=(",
             globalInverseTransform_[3][0], ", ",
             globalInverseTransform_[3][1], ", ",
             globalInverseTransform_[3][2], ", ",
             globalInverseTransform_[3][3], ")");
+        DebugLog::Info("KIRBY SCALE", "root node name = ", scene->mRootNode != nullptr ? scene->mRootNode->mName.C_Str() : "<null>");
+        LogMatrixDebug("KIRBY SCALE", "root transform", scene->mRootNode != nullptr ? AiToGlm(scene->mRootNode->mTransformation) : glm::mat4(1.0f));
+        LogMatrixDebug("KIRBY SCALE", "globalInverseTransform", globalInverseTransform_);
     }
     for (unsigned int animationIndex = 0; animationIndex < scene->mNumAnimations; ++animationIndex)
     {
@@ -721,8 +896,24 @@ void Model::ExtractBoneWeights(aiMesh* mesh, std::vector<Vertex>& vertices)
     {
         aiBone* sourceBone = mesh->mBones[boneIndex];
         const std::string boneName = sourceBone->mName.C_Str();
+        const glm::mat4 sourceOffset = AiToGlm(sourceBone->mOffsetMatrix);
+        std::string boneKey = boneName;
         int boneId = -1;
-        const auto existingBone = boneInfoMap_.find(boneName);
+        auto existingBone = boneInfoMap_.find(boneKey);
+        if (existingBone != boneInfoMap_.end()
+            && MaxMatrixElementDifference(existingBone->second.offset, sourceOffset) > 0.0001f)
+        {
+            const std::string meshName = mesh->mName.length > 0 ? mesh->mName.C_Str() : "mesh";
+            int suffix = 1;
+            do
+            {
+                boneKey = boneName + "@" + meshName + "#" + std::to_string(suffix);
+                suffix += 1;
+                existingBone = boneInfoMap_.find(boneKey);
+            }
+            while (existingBone != boneInfoMap_.end()
+                && MaxMatrixElementDifference(existingBone->second.offset, sourceOffset) > 0.0001f);
+        }
         if (existingBone == boneInfoMap_.end())
         {
             if (boneCounter_ >= kMaxBones)
@@ -738,8 +929,21 @@ void Model::ExtractBoneWeights(aiMesh* mesh, std::vector<Vertex>& vertices)
             boneId = boneCounter_;
             BoneInfo info;
             info.id = boneId;
-            info.offset = AiToGlm(sourceBone->mOffsetMatrix);
-            boneInfoMap_[boneName] = info;
+            info.nodeName = boneName;
+            info.key = boneKey;
+            info.offset = sourceOffset;
+            boneInfoMap_[boneKey] = info;
+            if (static_cast<std::size_t>(boneId) >= boneInfosById_.size())
+            {
+                boneInfosById_.resize(static_cast<std::size_t>(boneId) + 1u);
+            }
+            boneInfosById_[static_cast<std::size_t>(boneId)] = info;
+            boneIdsByNodeName_[boneName].push_back(boneId);
+            if (static_cast<std::size_t>(boneId) >= boneNamesById_.size())
+            {
+                boneNamesById_.resize(static_cast<std::size_t>(boneId) + 1u);
+            }
+            boneNamesById_[static_cast<std::size_t>(boneId)] = boneKey;
             boneCounter_ += 1;
         }
         else
@@ -749,19 +953,20 @@ void Model::ExtractBoneWeights(aiMesh* mesh, std::vector<Vertex>& vertices)
 
         if (kirbyDiagnostics)
         {
-            const glm::mat4 offset = AiToGlm(sourceBone->mOffsetMatrix);
             DebugLog::Info(
-                "ANIM",
+                "KIRBY ANIM",
                 "Kirby bone mesh=", mesh->mName.C_Str(),
                 " id=", boneId,
                 " name=", boneName,
+                " key=", boneKey,
                 " hasNode=", AnimationNodeContains(rootAnimationNode_, boneName) ? "yes" : "no",
                 " hasChannel=", ClipHasChannelForNode(boneName) ? "yes" : "no",
                 " offset[3]=(",
-                offset[3][0], ", ",
-                offset[3][1], ", ",
-                offset[3][2], ", ",
-                offset[3][3], ")");
+                sourceOffset[3][0], ", ",
+                sourceOffset[3][1], ", ",
+                sourceOffset[3][2], ", ",
+                sourceOffset[3][3], ")");
+            LogMatrixDebug("KIRBY SCALE", std::string("bone offset ") + boneKey, sourceOffset);
         }
 
         for (unsigned int weightIndex = 0; weightIndex < sourceBone->mNumWeights; ++weightIndex)
@@ -803,10 +1008,15 @@ void Model::ExtractBoneWeights(aiMesh* mesh, std::vector<Vertex>& vertices)
         maxOriginalInfluences = std::max(maxOriginalInfluences, influenceCount);
     }
 
+    verticesWithoutWeights_ += verticesWithoutWeights;
+    nonUnitWeightVertices_ += nonUnitWeightVertices;
+    discardedInfluences_ += discardedInfluences;
+    maxOriginalInfluences_ = std::max(maxOriginalInfluences_, maxOriginalInfluences);
+
     if (kirbyDiagnostics)
     {
         DebugLog::Info(
-            "ANIM",
+            "KIRBY ANIM",
             "Kirby mesh weights mesh=", mesh->mName.C_Str(),
             " vertices=", vertices.size(),
             " bones=", mesh->mNumBones,
@@ -930,7 +1140,37 @@ glm::mat4 Model::InterpolateChannelTransform(const BoneChannel& channel, float a
         * glm::scale(glm::mat4(1.0f), scale);
 }
 
-void Model::CalculateBoneTransform(const AnimationNode& node, const glm::mat4& parentTransform, const AnimationClip& clip, float animationTime)
+glm::mat4 Model::BuildFinalBoneMatrix(
+    const glm::mat4& globalTransform,
+    const glm::mat4& offset,
+    SkinningSpaceMode spaceMode) const
+{
+    glm::mat4 finalMatrix = globalTransform * offset;
+    if (spaceMode != SkinningSpaceMode::NoGlobalInverse)
+    {
+        finalMatrix = globalInverseTransform_ * finalMatrix;
+    }
+
+    if (spaceMode == SkinningSpaceMode::RootScaleCompensated)
+    {
+        const MatrixDebugInfo info = DecomposeMatrixForDebug(finalMatrix);
+        const float averageScale = (info.scale.x + info.scale.y + info.scale.z) / 3.0f;
+        if (std::isfinite(averageScale) && averageScale > 10.0f)
+        {
+            const float inverseScale = 1.0f / averageScale;
+            finalMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(inverseScale)) * finalMatrix;
+        }
+    }
+
+    return finalMatrix;
+}
+
+void Model::CalculateBoneTransform(
+    const AnimationNode& node,
+    const glm::mat4& parentTransform,
+    const AnimationClip& clip,
+    float animationTime,
+    SkinningSpaceMode spaceMode)
 {
     glm::mat4 nodeTransform = node.transform;
     const auto channel = clip.channels.find(node.name);
@@ -940,19 +1180,124 @@ void Model::CalculateBoneTransform(const AnimationNode& node, const glm::mat4& p
     }
 
     const glm::mat4 globalTransform = parentTransform * nodeTransform;
-    const auto bone = boneInfoMap_.find(node.name);
-    if (bone != boneInfoMap_.end())
+    const auto boneIds = boneIdsByNodeName_.find(node.name);
+    if (boneIds != boneIdsByNodeName_.end())
     {
-        const int id = bone->second.id;
-        if (id >= 0 && id < static_cast<int>(finalBoneMatrices_.size()))
+        for (const int id : boneIds->second)
         {
-            finalBoneMatrices_[static_cast<std::size_t>(id)] = globalInverseTransform_ * globalTransform * bone->second.offset;
+            if (id >= 0
+                && id < static_cast<int>(finalBoneMatrices_.size())
+                && id < static_cast<int>(boneInfosById_.size()))
+            {
+                finalBoneMatrices_[static_cast<std::size_t>(id)] = BuildFinalBoneMatrix(
+                    globalTransform,
+                    boneInfosById_[static_cast<std::size_t>(id)].offset,
+                    spaceMode);
+            }
         }
     }
 
     for (const AnimationNode& child : node.children)
     {
-        CalculateBoneTransform(child, globalTransform, clip, animationTime);
+        CalculateBoneTransform(child, globalTransform, clip, animationTime, spaceMode);
+    }
+}
+
+void Model::CalculateBindPoseTransform(
+    const AnimationNode& node,
+    const glm::mat4& parentTransform,
+    SkinningSpaceMode spaceMode)
+{
+    const glm::mat4 globalTransform = parentTransform * node.transform;
+    const auto boneIds = boneIdsByNodeName_.find(node.name);
+    if (boneIds != boneIdsByNodeName_.end())
+    {
+        for (const int id : boneIds->second)
+        {
+            if (id >= 0
+                && id < static_cast<int>(finalBoneMatrices_.size())
+                && id < static_cast<int>(boneInfosById_.size()))
+            {
+                finalBoneMatrices_[static_cast<std::size_t>(id)] = BuildFinalBoneMatrix(
+                    globalTransform,
+                    boneInfosById_[static_cast<std::size_t>(id)].offset,
+                    spaceMode);
+            }
+        }
+    }
+
+    for (const AnimationNode& child : node.children)
+    {
+        CalculateBindPoseTransform(child, globalTransform, spaceMode);
+    }
+}
+
+void Model::LogKirbyScaleDiagnostics(const std::string& label) const
+{
+    if (!IsKirbySourceName(sourceFilename_))
+    {
+        return;
+    }
+    if (!kirbyLoggedScaleLabels_.insert(label).second)
+    {
+        return;
+    }
+
+    float minScale = std::numeric_limits<float>::max();
+    float maxScale = 0.0f;
+    int invalidMatrices = 0;
+    int extremeMatrices = 0;
+    for (std::size_t index = 0; index < static_cast<std::size_t>(boneCounter_) && index < finalBoneMatrices_.size(); ++index)
+    {
+        const MatrixDebugInfo info = DecomposeMatrixForDebug(finalBoneMatrices_[index]);
+        const float localMin = std::min({ info.scale.x, info.scale.y, info.scale.z });
+        const float localMax = std::max({ info.scale.x, info.scale.y, info.scale.z });
+        minScale = std::min(minScale, localMin);
+        maxScale = std::max(maxScale, localMax);
+        if (!info.finite)
+        {
+            invalidMatrices += 1;
+        }
+        if (localMax > 10.0f || localMin < 0.001f)
+        {
+            extremeMatrices += 1;
+        }
+    }
+
+    if (minScale == std::numeric_limits<float>::max())
+    {
+        minScale = 0.0f;
+    }
+
+    DebugLog::Info(
+        "KIRBY SCALE",
+        "label=", label,
+        " min final scale=", minScale,
+        " max final scale=", maxScale,
+        " invalidMatrices=", invalidMatrices,
+        " extremeMatrices=", extremeMatrices,
+        " boneCount=", boneCounter_);
+
+    const std::size_t sampleCount = std::min<std::size_t>(5u, std::min(finalBoneMatrices_.size(), boneNamesById_.size()));
+    for (std::size_t index = 0; index < sampleCount; ++index)
+    {
+        LogMatrixDebug(
+            "KIRBY SCALE",
+            std::string("final bone matrix ")
+                + label
+                + " id="
+                + std::to_string(index)
+                + " name="
+                + boneNamesById_[index],
+            finalBoneMatrices_[index]);
+    }
+
+    if (maxScale > 10.0f)
+    {
+        DebugLog::Info(
+            "KIRBY DIAG RESULT",
+            "mode=", label,
+            " likely cause=bone matrices contain extreme scale; compare Identity vs BindPose/Animated. If Identity is stable, issue is hierarchy/global inverse/unit scale.");
     }
 }
 
@@ -973,6 +1318,15 @@ void Model::ProcessNode(
         glm::vec3(nodeTransform * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f)),
         node->mNumMeshes > 0
     });
+
+    if (IsKirbySourceName(sourceFilename_)
+        && (node->mNumMeshes > 0 || ToLowerAscii(nodeName).find("armature") != std::string::npos))
+    {
+        LogMatrixDebug(
+            "KIRBY SCALE",
+            std::string(node->mNumMeshes > 0 ? "mesh parent node " : "armature node ") + nodePath,
+            nodeTransform);
+    }
 
     for (unsigned int meshIndex = 0; meshIndex < node->mNumMeshes; ++meshIndex)
     {
@@ -1005,11 +1359,12 @@ Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nod
             " mesh=", mesh->mName.C_Str(),
             " bones=", mesh->mNumBones);
     }
-    const bool skinnedMesh = mesh->mNumBones > 0 && !IsKirbySourceName(sourceFilename_);
+    const bool skinnedMesh = mesh->mNumBones > 0 && !loadOptions_.bakeSkinnedMeshes;
     const glm::mat3 normalTransform = glm::inverseTranspose(glm::mat3(nodeTransform));
     glm::vec3 meshMin(std::numeric_limits<float>::max());
     glm::vec3 meshMax(std::numeric_limits<float>::lowest());
 
+    vertexCount_ += mesh->mNumVertices;
     vertices.reserve(mesh->mNumVertices);
     for (unsigned int vertexIndex = 0; vertexIndex < mesh->mNumVertices; ++vertexIndex)
     {

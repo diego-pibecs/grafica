@@ -95,11 +95,6 @@ target_include_directories(detour PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party/recastnavigation/Detour/Include"
 )
 
-set(RP3D_COMPILE_TESTBED OFF CACHE BOOL "" FORCE)
-set(RP3D_COMPILE_TESTS OFF CACHE BOOL "" FORCE)
-set(RP3D_GENERATE_DOCUMENTATION OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/reactphysics3d EXCLUDE_FROM_ALL)
-
 add_executable(grafica_bbb_base
   src/DebugLog.cpp
   src/main.cpp
@@ -114,7 +109,6 @@ add_executable(grafica_bbb_base
   src/import/ImportedGeometry.cpp
   src/navigation/RecastNavigationWorld.cpp
   src/physics/assets/CollisionAsset.cpp
-  src/physics/core/ReactPhysicsWorld.cpp
   src/physics/controller/CharacterController.cpp
   src/render/debug/DebugOverlayRenderer.cpp
   src/render/debug/PhysicsDebugRenderer.cpp
@@ -142,5 +136,4 @@ target_link_libraries(grafica_bbb_base PRIVATE
   soil2
   recast
   detour
-  reactphysics3d
 )

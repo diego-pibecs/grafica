@@ -378,6 +378,66 @@ bool IsStarEntity(const std::string& name)
         || lowerName.find("-star") != std::string::npos;
 }
 
+const char* KirbyModeName(BaseScene::KirbyRenderDebugMode mode)
+{
+    switch (mode)
+    {
+        case BaseScene::KirbyRenderDebugMode::StaticNoSkinning:
+            return "StaticNoSkinning";
+        case BaseScene::KirbyRenderDebugMode::SkinningIdentityBones:
+            return "SkinningIdentityBones";
+        case BaseScene::KirbyRenderDebugMode::SkinningBindPose:
+            return "SkinningBindPose";
+        case BaseScene::KirbyRenderDebugMode::SkinningBindPoseNoGlobalInverse:
+            return "SkinningBindPoseNoGlobalInverse";
+        case BaseScene::KirbyRenderDebugMode::SkinningBindPoseScaleCompensated:
+            return "SkinningBindPoseScaleCompensated";
+        case BaseScene::KirbyRenderDebugMode::SkinningAnimated:
+            return "SkinningAnimated";
+        case BaseScene::KirbyRenderDebugMode::SkinningAnimatedNoGlobalInverse:
+            return "SkinningAnimatedNoGlobalInverse";
+        case BaseScene::KirbyRenderDebugMode::SkinningAnimatedScaleCompensated:
+            return "SkinningAnimatedScaleCompensated";
+        case BaseScene::KirbyRenderDebugMode::ProceduralFallback:
+            return "ProceduralFallback";
+    }
+    return "Unknown";
+}
+
+Model::SkinningSpaceMode KirbySkinningSpaceMode(BaseScene::KirbyRenderDebugMode mode)
+{
+    switch (mode)
+    {
+        case BaseScene::KirbyRenderDebugMode::SkinningBindPoseNoGlobalInverse:
+        case BaseScene::KirbyRenderDebugMode::SkinningAnimatedNoGlobalInverse:
+            return Model::SkinningSpaceMode::NoGlobalInverse;
+        case BaseScene::KirbyRenderDebugMode::SkinningBindPoseScaleCompensated:
+        case BaseScene::KirbyRenderDebugMode::SkinningAnimatedScaleCompensated:
+            return Model::SkinningSpaceMode::RootScaleCompensated;
+        case BaseScene::KirbyRenderDebugMode::StaticNoSkinning:
+        case BaseScene::KirbyRenderDebugMode::SkinningIdentityBones:
+        case BaseScene::KirbyRenderDebugMode::SkinningBindPose:
+        case BaseScene::KirbyRenderDebugMode::SkinningAnimated:
+        case BaseScene::KirbyRenderDebugMode::ProceduralFallback:
+            return Model::SkinningSpaceMode::SceneRootInverse;
+    }
+    return Model::SkinningSpaceMode::SceneRootInverse;
+}
+
+bool IsKirbyBindPoseMode(BaseScene::KirbyRenderDebugMode mode)
+{
+    return mode == BaseScene::KirbyRenderDebugMode::SkinningBindPose
+        || mode == BaseScene::KirbyRenderDebugMode::SkinningBindPoseNoGlobalInverse
+        || mode == BaseScene::KirbyRenderDebugMode::SkinningBindPoseScaleCompensated;
+}
+
+bool IsKirbyAnimatedMode(BaseScene::KirbyRenderDebugMode mode)
+{
+    return mode == BaseScene::KirbyRenderDebugMode::SkinningAnimated
+        || mode == BaseScene::KirbyRenderDebugMode::SkinningAnimatedNoGlobalInverse
+        || mode == BaseScene::KirbyRenderDebugMode::SkinningAnimatedScaleCompensated;
+}
+
 bool UseTextureForEntity(const std::string& name, bool modelHasTextures)
 {
     const std::string lowerName = ToLowerAscii(name);
@@ -438,7 +498,17 @@ glm::vec3 BaseColorForEntity(const std::string& name)
 
 float UnlitFactorForEntity(const std::string& name)
 {
-    return IsStarEntity(name) ? 0.28f : 0.0f;
+    const std::string lowerName = ToLowerAscii(name);
+    if (IsStarEntity(name))
+    {
+        return 0.28f;
+    }
+    if (lowerName.find("zone-one-enemy") != std::string::npos
+        || lowerName.find("zone-two-bat") != std::string::npos)
+    {
+        return 0.16f;
+    }
+    return 0.0f;
 }
 
 bool BlocksNavigationForEntity(const std::string& name)
@@ -739,6 +809,7 @@ void BaseScene::Update(const PlayerSnapshot& player, float absoluteTimeSeconds, 
     }
     UpdateKirbyVisualYaw(player, dt);
     UpdatePatrolActors(dt);
+    shadowMapDirty_ = true;
     UpdateParkourGuideLight(player, dt);
     if (gameOverPendingReset_)
     {
@@ -1078,7 +1149,10 @@ bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDire
 {
     for (CollectibleStar& star : collectibleStars_)
     {
-        if (!star.collected && RayIntersectsSphere(rayOrigin, rayDirection, star.position, 1.15f, 5.6f))
+        const float playerDistance = glm::length(playerPosition - star.position);
+        if (!star.collected
+            && playerDistance < 3.7f
+            && RayIntersectsSphere(rayOrigin, rayDirection, star.position, 1.15f, 28.0f))
         {
             star.collected = true;
             stars_ += 1;
@@ -1094,8 +1168,12 @@ bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDire
         }
     }
 
-    if (RayIntersectsSphere(rayOrigin, rayDirection, portalPosition_, 2.1f, 6.2f)
-        || RayIntersectsSphere(rayOrigin, rayDirection, portalPropPosition_, 1.4f, 5.2f))
+    const float playerDistanceToPortal = std::min(
+        glm::length(playerPosition - portalPosition_),
+        glm::length(playerPosition - portalPropPosition_));
+    if (playerDistanceToPortal < 4.6f
+        && (RayIntersectsSphere(rayOrigin, rayDirection, portalPosition_, 2.1f, 28.0f)
+            || RayIntersectsSphere(rayOrigin, rayDirection, portalPropPosition_, 1.4f, 28.0f)))
     {
         if (!portalStarCollected_)
         {
@@ -1119,7 +1197,7 @@ bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDire
     }
 
     const float distanceToFinalZone = glm::length(glm::vec2(playerPosition.x, playerPosition.z) - glm::vec2(whispyPosition_.x, whispyPosition_.z));
-    const bool whispyTargeted = RayIntersectsSphere(rayOrigin, rayDirection, whispyPosition_ + glm::vec3(0.0f, 2.8f, 0.0f), 3.4f, 12.0f);
+    const bool whispyTargeted = RayIntersectsSphere(rayOrigin, rayDirection, whispyPosition_ + glm::vec3(0.0f, 2.8f, 0.0f), 3.4f, 32.0f);
     if (distanceToFinalZone > 9.0f || !whispyTargeted)
     {
         DebugLog::Info(
@@ -1137,8 +1215,8 @@ bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDire
 
     if (stars_ < 3)
     {
-        ShowTimedMessage("NECESITAS MAS PODER PARA DERROTAR A WHISPY WOODS", 3.5f, 9);
-        ApplyPlayerDamage("NECESITAS MAS PODER PARA DERROTAR A WHISPY WOODS", true);
+        ShowTimedMessage("NECESITAS MAS PODER DE ESTRELLAS", 3.5f, 10);
+        ApplyPlayerDamage("NECESITAS MAS PODER DE ESTRELLAS", true);
         return true;
     }
 
@@ -1187,6 +1265,58 @@ void BaseScene::TriggerKirbyEntranceAnimation()
 {
     kirbyKeyframeActive_ = true;
     kirbyKeyframeStartTime_ = absoluteTimeSeconds_;
+}
+
+void BaseScene::SetKirbyCameraFacing(const glm::vec3& forward, CameraMode mode)
+{
+    kirbyCameraMode_ = mode;
+    const glm::vec3 horizontal(forward.x, 0.0f, forward.z);
+    if (glm::dot(horizontal, horizontal) > 0.0001f)
+    {
+        kirbyCameraForward_ = glm::normalize(horizontal);
+    }
+}
+
+void BaseScene::SetKirbyCameraForward(const glm::vec3& forward)
+{
+    SetKirbyCameraFacing(forward, kirbyCameraMode_);
+}
+
+void BaseScene::CycleKirbyDebugMode()
+{
+    switch (kirbyDebugMode_)
+    {
+        case KirbyRenderDebugMode::StaticNoSkinning:
+            kirbyDebugMode_ = KirbyRenderDebugMode::SkinningIdentityBones;
+            break;
+        case KirbyRenderDebugMode::SkinningIdentityBones:
+            kirbyDebugMode_ = KirbyRenderDebugMode::SkinningBindPose;
+            break;
+        case KirbyRenderDebugMode::SkinningBindPose:
+            kirbyDebugMode_ = KirbyRenderDebugMode::SkinningBindPoseNoGlobalInverse;
+            break;
+        case KirbyRenderDebugMode::SkinningBindPoseNoGlobalInverse:
+            kirbyDebugMode_ = KirbyRenderDebugMode::SkinningBindPoseScaleCompensated;
+            break;
+        case KirbyRenderDebugMode::SkinningBindPoseScaleCompensated:
+            kirbyDebugMode_ = KirbyRenderDebugMode::SkinningAnimated;
+            break;
+        case KirbyRenderDebugMode::SkinningAnimated:
+            kirbyDebugMode_ = KirbyRenderDebugMode::SkinningAnimatedNoGlobalInverse;
+            break;
+        case KirbyRenderDebugMode::SkinningAnimatedNoGlobalInverse:
+            kirbyDebugMode_ = KirbyRenderDebugMode::SkinningAnimatedScaleCompensated;
+            break;
+        case KirbyRenderDebugMode::SkinningAnimatedScaleCompensated:
+            kirbyDebugMode_ = KirbyRenderDebugMode::ProceduralFallback;
+            break;
+        case KirbyRenderDebugMode::ProceduralFallback:
+            kirbyDebugMode_ = KirbyRenderDebugMode::StaticNoSkinning;
+            break;
+    }
+    kirbyDrawDiagnosticLogged_ = false;
+    shadowMapDirty_ = true;
+    DebugLog::Info("KIRBY DEBUG", "mode changed to ", KirbyModeName(kirbyDebugMode_));
 }
 
 void BaseScene::ToggleWhispyVariant()
@@ -1392,19 +1522,26 @@ std::vector<std::string> BaseScene::BuildContextMessageLines() const
 
 std::vector<std::string> BaseScene::BuildCenterMessageLines() const
 {
+    if (gameOverPendingReset_)
+    {
+        if (!lastDamageMessage_.empty() && lastDamageMessage_ != "GAME OVER")
+        {
+            return { lastDamageMessage_, "GAME OVER" };
+        }
+        return { "GAME OVER" };
+    }
+
     if (timedMessage_.remainingTime > 0.0f && timedMessage_.priority >= 8)
     {
         if (timedMessage_.text == "INTENTALO DE NUEVO")
         {
             return { "VIDA PERDIDA", "INTENTALO DE NUEVO" };
         }
-        if (timedMessage_.text == "NECESITAS MAS PODER PARA DERROTAR A WHISPY WOODS")
-        {
-            return { "NECESITAS MAS PODER", "VIDA PERDIDA" };
-        }
-        if (timedMessage_.text == "NO TOQUES AL ENEMIGO"
+        if (timedMessage_.text == "EL HONGO TE HA GOLPEADO"
+            || timedMessage_.text == "LA PLANTA TE HA GOLPEADO"
             || timedMessage_.text == "EL MURCIELAGO TE HA GOLPEADO"
-            || timedMessage_.text == "WHISPY TE HA GOLPEADO")
+            || timedMessage_.text == "WHISPY TE HA GOLPEADO"
+            || timedMessage_.text == "NECESITAS MAS PODER DE ESTRELLAS")
         {
             return { "VIDA PERDIDA", timedMessage_.text };
         }
@@ -1450,18 +1587,26 @@ void BaseScene::LoadVegetableValleyDemo()
     enemyMushroomPatrolA_ = glm::vec3(-3.0f, 0.0f, 12.3f);
     enemyMushroomPatrolB_ = glm::vec3(-5.5f, 0.0f, -0.24f);
     enemyMushroomPosition_ = enemyMushroomPatrolA_;
-    enemyPlantPatrolA_ = glm::vec3(5.6f, 0.0f, 11.5f);
-    enemyPlantPatrolB_ = glm::vec3(8.5f, 0.0f, 1.5f);
+    enemyPlantPatrolA_ = glm::vec3(7.21f, 0.0f, 12.9f);
+    enemyPlantPatrolB_ = glm::vec3(4.3f, 0.0f, 4.0f);
+    enemyPlantPatrolC_ = glm::vec3(4.5f, 0.0f, -5.65f);
     enemyPlantPosition_ = enemyPlantPatrolA_;
+    enemyPlantPatrolTargetIndex_ = 1;
+    enemyPlantPatrolStep_ = 1;
     enemyMushroomTurn_.currentYaw = glm::degrees(std::atan2((enemyMushroomPatrolB_ - enemyMushroomPatrolA_).z, (enemyMushroomPatrolB_ - enemyMushroomPatrolA_).x));
     enemyPlantTurn_.currentYaw = glm::degrees(std::atan2((enemyPlantPatrolB_ - enemyPlantPatrolA_).z, (enemyPlantPatrolB_ - enemyPlantPatrolA_).x));
     batBasePosition_ = glm::vec3(68.8f, 3.2f, 2.4f);
     batPosition_ = batBasePosition_;
+    batBBasePosition_ = glm::vec3(71.2f, 5.0f, -14.6f);
+    batBPosition_ = batBBasePosition_;
     batPatrolOffsetX_ = 0.0f;
+    batBPatrolOffsetX_ = 0.0f;
     batPatrolDirection_ = 1;
+    batBPatrolDirection_ = -1;
     kirbyVisualYawDegrees_ = playerSpawnYawDegrees_;
     kirbyTurn_.currentYaw = kirbyVisualYawDegrees_;
     batTurn_.currentYaw = -32.0f;
+    batBTurn_.currentYaw = 148.0f;
     activeModelLabel_ = "Kirby Vegetable Valley P1";
     Model::InspectAssimpScene(assetsRoot_ / "models" / "enemigos" / "hongo.fbx");
     Model::InspectAssimpScene(assetsRoot_ / "models" / "enemigos" / "planta.fbx");
@@ -1488,17 +1633,40 @@ void BaseScene::LoadVegetableValleyDemo()
     kirbyEntity.name = "kirby-player";
     kirbyEntity.worldPosition = playerSpawnPosition_;
     kirbyEntity.worldYawDegrees = playerSpawnYawDegrees_;
+    ModelLoadOptions kirbySkinnedOptions;
+    kirbySkinnedOptions.preserveFbxPivots = false;
     SetupPlacement(
         kirbyEntity,
         assetsRoot_ / "models" / "kirby" / "source" / "KirbyForSketchfab.fbx",
         1.25f,
         180.0f,
         true,
-        true);
+        true,
+        kirbySkinnedOptions);
     kirbyPlacement_ = std::move(kirbyEntity.placement);
+    SceneEntity kirbyStaticEntity;
+    kirbyStaticEntity.name = "kirby-player-static-debug";
+    kirbyStaticEntity.worldPosition = playerSpawnPosition_;
+    kirbyStaticEntity.worldYawDegrees = playerSpawnYawDegrees_;
+    ModelLoadOptions kirbyStaticOptions;
+    kirbyStaticOptions.bakeSkinnedMeshes = true;
+    kirbyStaticOptions.preserveFbxPivots = false;
+    SetupPlacement(
+        kirbyStaticEntity,
+        assetsRoot_ / "models" / "kirby" / "source" / "KirbyForSketchfab.fbx",
+        1.25f,
+        180.0f,
+        true,
+        true,
+        kirbyStaticOptions);
+    kirbyStaticPlacement_ = std::move(kirbyStaticEntity.placement);
     if (forceProceduralKirbyAnimation_)
     {
         DebugLog::Info("ANIM", "Kirby skeletal runtime disabled: FBX skinning deforms this asset; using procedural visual animation fallback.");
+    }
+    else
+    {
+        DebugLog::Info("KIRBY DEBUG", "Kirby diagnostic modes enabled. Default mode=", KirbyModeName(kirbyDebugMode_));
     }
 
     whispyFbxLoadAttempted_ = true;
@@ -1556,6 +1724,7 @@ void BaseScene::LoadVegetableValleyDemo()
         { "zone-one-enemy-hongo", assetsRoot_ / "models" / "enemigos" / "hongo.fbx", enemyMushroomPosition_, enemyMushroomTurn_.currentYaw, 1.15f, true, false },
         { "zone-one-enemy-planta", assetsRoot_ / "models" / "enemigos" / "planta.fbx", enemyPlantPosition_, enemyPlantTurn_.currentYaw, 1.25f, true, false },
         { "zone-two-bat", assetsRoot_ / "models" / "animated-halloween-bat" / "source" / "Sketchfab_2023_10_26_02_42_48.fbx", batPosition_, -32.0f, 1.25f, true, false },
+        { "zone-two-bat-b", assetsRoot_ / "models" / "animated-halloween-bat" / "source" / "Sketchfab_2023_10_26_02_42_48.fbx", batBPosition_, 148.0f, 1.15f, true, false },
         { "portal-dummy-star", assetsRoot_ / "models" / "nuevos" / "star.obj", portalPropPosition_, 0.0f, 0.9f, false, false }
     };
 
@@ -1898,6 +2067,18 @@ void BaseScene::LoadVegetableValleyDemo()
         removeNearestDecorationNear("rock", cleanupPosition, 1.65f);
     }
 
+    const std::array<glm::vec2, 4> clippedBushRockPositions {
+        glm::vec2(-10.72f, -10.93f),
+        glm::vec2(-5.59f, -12.27f),
+        glm::vec2(-7.56f, -5.88f),
+        glm::vec2(-9.08f, 2.39f)
+    };
+    for (const glm::vec2& cleanupPosition : clippedBushRockPositions)
+    {
+        removeNearestDecorationNear("bush", cleanupPosition, 1.50f);
+        removeNearestDecorationNear("rock", cleanupPosition, 1.50f);
+    }
+
     for (const DecorationDesc& decoration : decorations)
     {
         AddStaticSceneEntity(
@@ -1998,7 +2179,8 @@ void BaseScene::AddStaticSceneEntity(
     float yawOffsetDegrees,
     bool normalizeToHeight,
     bool loadTextures,
-    bool contributesToCollision)
+    bool contributesToCollision,
+    const ModelLoadOptions& loadOptions)
 {
     if (!fs::exists(path))
     {
@@ -2011,7 +2193,7 @@ void BaseScene::AddStaticSceneEntity(
     entity.worldPosition = worldPosition;
     entity.worldYawDegrees = worldYawDegrees;
     entity.contributesToCollision = contributesToCollision;
-    SetupPlacement(entity, path, targetSize, yawOffsetDegrees, normalizeToHeight, loadTextures);
+    SetupPlacement(entity, path, targetSize, yawOffsetDegrees, normalizeToHeight, loadTextures, loadOptions);
     if (entity.placement.model == nullptr)
     {
         DebugLog::Error("BaseScene", "Skipping decoration with failed model load ", path.string());
@@ -2184,7 +2366,7 @@ void BaseScene::RebuildContextMessage(const PlayerSnapshot& player)
 
     if (whispyState_ != WhispyState::Defeated && currentZone_ == SceneZone::Whispy && distanceToWhispy < 9.0f)
     {
-        contextMessage_ = "PRESIONA E PARA INTERACTUAR CON WHISPY WOODS";
+        contextMessage_ = "PRESIONA E PARA ATACAR";
     }
 }
 
@@ -2208,6 +2390,7 @@ bool BaseScene::ApplyPlayerDamage(const std::string& message, bool preserveProgr
     }
 
     lives_ = std::max(0, lives_ - 1);
+    lastDamageMessage_ = message;
     damageCooldownTimer_ = 1.2f;
     TriggerDamageFlash();
     pendingTeleportYawDegrees_ = playerSpawnYawDegrees_;
@@ -2255,14 +2438,20 @@ void BaseScene::UpdateContactDamage(const PlayerSnapshot& player)
         && std::abs(player.position.y - enemyMushroomPosition_.y) < 1.8f;
     const bool touchedPlant = glm::length(playerXZ - glm::vec2(enemyPlantPosition_.x, enemyPlantPosition_.z)) < 1.35f
         && std::abs(player.position.y - enemyPlantPosition_.y) < 1.8f;
-    if (currentZone_ == SceneZone::Entrance && (touchedMushroom || touchedPlant))
+    if (currentZone_ == SceneZone::Entrance && touchedMushroom)
     {
-        ApplyPlayerDamage("NO TOQUES AL ENEMIGO", true);
+        ApplyPlayerDamage("EL HONGO TE HA GOLPEADO", true);
+        return;
+    }
+    if (currentZone_ == SceneZone::Entrance && touchedPlant)
+    {
+        ApplyPlayerDamage("LA PLANTA TE HA GOLPEADO", true);
         return;
     }
 
     if (player.position.x > 48.0f
-        && glm::length(player.position - batPosition_) < 1.65f)
+        && (glm::length(player.position - batPosition_) < 1.65f
+            || glm::length(player.position - batBPosition_) < 1.55f))
     {
         ApplyPlayerDamage("EL MURCIELAGO TE HA GOLPEADO", true);
         return;
@@ -2274,7 +2463,7 @@ void BaseScene::UpdateContactDamage(const PlayerSnapshot& player)
         && player.position.y >= whispyPosition_.y - 0.15f
         && player.position.y < whispyPosition_.y + 4.2f)
     {
-        ApplyPlayerDamage("WHISPY TE HA GOLPEADO", true);
+        ApplyPlayerDamage(stars_ < 3 ? "NECESITAS MAS PODER DE ESTRELLAS" : "WHISPY TE HA GOLPEADO", true);
     }
 }
 
@@ -2464,52 +2653,118 @@ void BaseScene::UpdatePatrolActors(float deltaTimeSeconds)
         enemyMushroomPatrolSpeed_,
         enemyMushroomTurn_,
         "zone-one-enemy-hongo");
-    updateGroundPatrol(
-        enemyPlantPosition_,
+
+    const std::array<glm::vec3, 3> plantRoute {
         enemyPlantPatrolA_,
         enemyPlantPatrolB_,
-        enemyPlantPatrolDirection_,
-        enemyPlantPatrolSpeed_,
-        enemyPlantTurn_,
-        "zone-one-enemy-planta");
-
-    if (!batTurn_.active)
+        enemyPlantPatrolC_
+    };
+    enemyPlantPatrolTargetIndex_ = std::clamp(enemyPlantPatrolTargetIndex_, 0, 2);
+    glm::vec3 plantTarget = plantRoute[static_cast<std::size_t>(enemyPlantPatrolTargetIndex_)];
+    glm::vec3 plantDelta = plantTarget - enemyPlantPosition_;
+    plantDelta.y = 0.0f;
+    const float plantDistance = glm::length(plantDelta);
+    if (plantDistance > 0.001f)
     {
-        const float desiredBatYaw = batPatrolDirection_ > 0 ? -32.0f : 148.0f;
-        if (std::abs(NormalizeDegrees(desiredBatYaw - batTurn_.currentYaw)) > 1.0f)
+        const glm::vec3 direction = plantDelta / plantDistance;
+        const float targetYaw = glm::degrees(std::atan2(direction.z, direction.x));
+        if (std::abs(NormalizeDegrees(targetYaw - enemyPlantTurn_.targetYaw)) > 1.0f)
         {
-            StartTurn(batTurn_, desiredBatYaw, 0.55f);
+            StartTurn(enemyPlantTurn_, targetYaw, 0.48f);
         }
+        const float turnSlowdown = enemyPlantTurn_.active ? 0.65f : 1.0f;
+        const float step = std::min(plantDistance, enemyPlantPatrolSpeed_ * dt * turnSlowdown);
+        enemyPlantPosition_ += direction * step;
     }
+    if (plantDistance < 0.18f)
+    {
+        if (enemyPlantPatrolTargetIndex_ >= 2)
+        {
+            enemyPlantPatrolStep_ = -1;
+        }
+        else if (enemyPlantPatrolTargetIndex_ <= 0)
+        {
+            enemyPlantPatrolStep_ = 1;
+        }
+        enemyPlantPatrolTargetIndex_ = std::clamp(enemyPlantPatrolTargetIndex_ + enemyPlantPatrolStep_, 0, 2);
+    }
+    UpdateTurn(enemyPlantTurn_, dt);
+    enemyPlantPosition_.y = 0.0f;
+    syncEntity("zone-one-enemy-planta", enemyPlantPosition_, enemyPlantTurn_.currentYaw);
 
-    const float turnSlowdown = batTurn_.active ? 0.25f : 1.0f;
-    batPatrolOffsetX_ += static_cast<float>(batPatrolDirection_) * batPatrolSpeed_ * dt * turnSlowdown;
-    if (batPatrolOffsetX_ > 3.0f)
+    auto updateBatPatrol = [&](glm::vec3& position, const glm::vec3& basePosition, float& offsetX, int& directionSign, float speed, TurnAnimation& turn, const std::string& entityName, float patrolExtent)
     {
-        batPatrolOffsetX_ = 3.0f;
-        batPatrolDirection_ = -1;
-        StartTurn(batTurn_, 148.0f, 0.55f);
-    }
-    else if (batPatrolOffsetX_ < -3.0f)
-    {
-        batPatrolOffsetX_ = -3.0f;
-        batPatrolDirection_ = 1;
-        StartTurn(batTurn_, -32.0f, 0.55f);
-    }
-    UpdateTurn(batTurn_, dt);
-    batPosition_ = batBasePosition_ + glm::vec3(batPatrolOffsetX_, std::sin(absoluteTimeSeconds_ * 2.2f) * 0.18f, 0.0f);
-    syncEntity("zone-two-bat", batPosition_, batTurn_.currentYaw);
+        if (!turn.active)
+        {
+            const float desiredYaw = directionSign > 0 ? -32.0f : 148.0f;
+            if (std::abs(NormalizeDegrees(desiredYaw - turn.currentYaw)) > 1.0f)
+            {
+                StartTurn(turn, desiredYaw, 0.55f);
+            }
+        }
+
+        const float turnSlowdown = turn.active ? 0.25f : 1.0f;
+        offsetX += static_cast<float>(directionSign) * speed * dt * turnSlowdown;
+        if (offsetX > patrolExtent)
+        {
+            offsetX = patrolExtent;
+            directionSign = -1;
+            StartTurn(turn, 148.0f, 0.55f);
+        }
+        else if (offsetX < -patrolExtent)
+        {
+            offsetX = -patrolExtent;
+            directionSign = 1;
+            StartTurn(turn, -32.0f, 0.55f);
+        }
+        UpdateTurn(turn, dt);
+        position = basePosition + glm::vec3(offsetX, std::sin((absoluteTimeSeconds_ * 2.2f) + (basePosition.z * 0.15f)) * 0.18f, 0.0f);
+        syncEntity(entityName, position, turn.currentYaw);
+    };
+
+    updateBatPatrol(batPosition_, batBasePosition_, batPatrolOffsetX_, batPatrolDirection_, batPatrolSpeed_, batTurn_, "zone-two-bat", 3.0f);
+    updateBatPatrol(batBPosition_, batBBasePosition_, batBPatrolOffsetX_, batBPatrolDirection_, batBPatrolSpeed_, batBTurn_, "zone-two-bat-b", 2.35f);
 }
 
 void BaseScene::UpdateKirbyVisualYaw(const PlayerSnapshot& player, float deltaTimeSeconds)
 {
     const glm::vec2 horizontalVelocity(player.velocity.x, player.velocity.z);
-    if (glm::length(horizontalVelocity) >= 0.08f)
+    float targetYaw = player.facingYawDegrees;
+    bool hasTargetYaw = false;
+
+    if (kirbyCameraMode_ == CameraMode::ThirdPerson)
     {
-        const float targetYaw = glm::degrees(std::atan2(horizontalVelocity.y, horizontalVelocity.x));
+        glm::vec3 forwardXZ = kirbyCameraForward_;
+        forwardXZ.y = 0.0f;
+        if (glm::dot(forwardXZ, forwardXZ) > 0.0001f)
+        {
+            forwardXZ = glm::normalize(forwardXZ);
+            targetYaw = glm::degrees(std::atan2(forwardXZ.x, forwardXZ.z)) + kirbyModelForwardOffsetDegrees_;
+            hasTargetYaw = true;
+        }
+    }
+
+    if (!hasTargetYaw && glm::length(horizontalVelocity) >= 0.08f)
+    {
+        const glm::vec2 desiredDirection = glm::normalize(horizontalVelocity);
+        targetYaw = glm::degrees(std::atan2(desiredDirection.y, desiredDirection.x));
+        hasTargetYaw = true;
+    }
+
+    if (hasTargetYaw)
+    {
+        targetYaw = NormalizeDegrees(targetYaw);
         if (std::abs(NormalizeDegrees(targetYaw - kirbyTurn_.targetYaw)) > 1.0f)
         {
-            StartTurn(kirbyTurn_, targetYaw, 0.35f);
+            StartTurn(kirbyTurn_, targetYaw, std::max(0.08f, 1.0f / std::max(kirbyTurnSpeed_, 0.01f)));
+            DebugLog::Info(
+                "KIRBY FACING",
+                "cameraMode=", kirbyCameraMode_ == CameraMode::ThirdPerson ? "ThirdPerson" : "Fps",
+                " cameraForward=(",
+                kirbyCameraForward_.x, ", ", kirbyCameraForward_.y, ", ", kirbyCameraForward_.z,
+                ") targetYaw=", targetYaw,
+                " visualYaw=", kirbyVisualYawDegrees_,
+                " modelForwardOffset=", kirbyModelForwardOffsetDegrees_);
         }
     }
     UpdateTurn(kirbyTurn_, std::clamp(deltaTimeSeconds, 0.0f, 0.1f));
@@ -2530,12 +2785,15 @@ void BaseScene::ResetGameState(bool resetLives)
     portalTeleportConsumed_ = false;
     gameOverPendingReset_ = false;
     gameOverStartTime_ = -100.0f;
+    lastDamageMessage_.clear();
     damageFlashTimer_ = 0.0f;
     damageCooldownTimer_ = 0.0f;
     enemyMushroomPosition_ = enemyMushroomPatrolA_;
     enemyPlantPosition_ = enemyPlantPatrolA_;
     enemyMushroomPatrolDirection_ = 1;
     enemyPlantPatrolDirection_ = 1;
+    enemyPlantPatrolTargetIndex_ = 1;
+    enemyPlantPatrolStep_ = 1;
     enemyMushroomTurn_.currentYaw = glm::degrees(std::atan2((enemyMushroomPatrolB_ - enemyMushroomPatrolA_).z, (enemyMushroomPatrolB_ - enemyMushroomPatrolA_).x));
     enemyMushroomTurn_.targetYaw = enemyMushroomTurn_.currentYaw;
     enemyMushroomTurn_.active = false;
@@ -2548,6 +2806,12 @@ void BaseScene::ResetGameState(bool resetLives)
     batTurn_.currentYaw = -32.0f;
     batTurn_.targetYaw = -32.0f;
     batTurn_.active = false;
+    batBPatrolOffsetX_ = 0.0f;
+    batBPatrolDirection_ = -1;
+    batBPosition_ = batBBasePosition_;
+    batBTurn_.currentYaw = 148.0f;
+    batBTurn_.targetYaw = 148.0f;
+    batBTurn_.active = false;
     kirbyVisualYawDegrees_ = playerSpawnYawDegrees_;
     kirbyTurn_.currentYaw = kirbyVisualYawDegrees_;
     kirbyTurn_.targetYaw = kirbyVisualYawDegrees_;
@@ -2571,7 +2835,8 @@ void BaseScene::SetupPlacement(
     float targetSize,
     float yawOffsetDegrees,
     bool normalizeToHeight,
-    bool loadTextures)
+    bool loadTextures,
+    const ModelLoadOptions& loadOptions)
 {
     DebugLog::Info(
         "BaseScene",
@@ -2580,7 +2845,7 @@ void BaseScene::SetupPlacement(
         " normalizeToHeight=", normalizeToHeight,
         " loadTextures=", loadTextures);
     entity.placement.sourcePath = path;
-    entity.placement.model = std::make_unique<Model>(path, loadTextures);
+    entity.placement.model = std::make_unique<Model>(path, loadTextures, loadOptions);
     if (!entity.placement.model->IsLoaded())
     {
         DebugLog::Error("BaseScene", "Failed placement load for ", path.string());
@@ -2617,16 +2882,21 @@ glm::mat4 BaseScene::BuildStaticModelMatrix(const SceneEntity& entity) const
     {
         position.y += std::sin(absoluteTimeSeconds_ * 2.4f) * 0.18f;
     }
-    else if (lowerName == "zone-two-bat")
+    else if (lowerName.rfind("zone-two-bat", 0) == 0)
     {
         position.y += std::sin(absoluteTimeSeconds_ * 2.8f) * 0.22f;
-        extraYawDegrees = std::sin(absoluteTimeSeconds_ * 1.7f) * 5.0f;
+        extraYawDegrees = 100.0f + (std::sin(absoluteTimeSeconds_ * 1.7f) * 5.0f);
         extraRollDegrees = std::sin(absoluteTimeSeconds_ * 3.2f) * 3.5f;
     }
     else if (lowerName == "zone-one-enemy-hongo" || lowerName == "zone-one-enemy-planta")
     {
         position.y += std::sin(absoluteTimeSeconds_ * 3.4f) * 0.035f;
+        extraYawDegrees = lowerName == "zone-one-enemy-hongo" ? -90.0f : -100.0f;
         extraRollDegrees = std::sin(absoluteTimeSeconds_ * 5.0f) * 2.0f;
+    }
+    else if (lowerName.find("mushroom") != std::string::npos)
+    {
+        extraYawDegrees = -90.0f;
     }
 
     glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
@@ -2672,6 +2942,11 @@ glm::mat4 BaseScene::BuildDoorModelMatrix(const InteractiveDoor& door) const
 
 glm::mat4 BaseScene::BuildKirbyModelMatrix() const
 {
+    const bool useStableStatic = kirbyDebugMode_ == KirbyRenderDebugMode::StaticNoSkinning
+        || kirbyDebugMode_ == KirbyRenderDebugMode::ProceduralFallback;
+    const ModelPlacement& activePlacement = useStableStatic && kirbyStaticPlacement_.model != nullptr
+        ? kirbyStaticPlacement_
+        : kirbyPlacement_;
     glm::vec3 position = latestPlayer_.position;
     float scaleMultiplier = 1.0f;
     float extraYawDegrees = 0.0f;
@@ -2684,7 +2959,7 @@ glm::mat4 BaseScene::BuildKirbyModelMatrix() const
         scaleMultiplier = sample.scale;
         extraYawDegrees = sample.extraYawDegrees;
     }
-    else
+    else if (!kirbySkeletalAnimationThisFrame_ && !kirbyDisableProceduralPoseThisFrame_)
     {
         const float movementAmount = std::clamp(latestPlayer_.horizontalSpeed / 4.0f, 0.0f, 1.0f);
         const float idleBreath = 1.0f + (std::sin(absoluteTimeSeconds_ * 2.2f) * 0.012f);
@@ -2695,13 +2970,13 @@ glm::mat4 BaseScene::BuildKirbyModelMatrix() const
     }
 
     glm::mat4 model = glm::translate(glm::mat4(1.0f), position);
-    model = glm::rotate(model, glm::radians(kirbyVisualYawDegrees_ + kirbyPlacement_.yawOffsetDegrees + extraYawDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(kirbyVisualYawDegrees_ + activePlacement.yawOffsetDegrees + extraYawDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
     if (std::abs(extraRollDegrees) > 0.001f)
     {
         model = glm::rotate(model, glm::radians(extraRollDegrees), glm::vec3(0.0f, 0.0f, 1.0f));
     }
-    model = glm::scale(model, glm::vec3(kirbyPlacement_.scale * scaleMultiplier));
-    model = glm::translate(model, kirbyPlacement_.rawOffset);
+    model = glm::scale(model, glm::vec3(activePlacement.scale * scaleMultiplier));
+    model = glm::translate(model, activePlacement.rawOffset);
     return model;
 }
 
@@ -3151,9 +3426,33 @@ void BaseScene::DrawShadowCasters(const ShaderProgram& shader) const
             continue;
         }
 
+        bool useSkinning = false;
+        const std::string lowerEntityName = ToLowerAscii(entity.name);
+        if (lowerEntityName.rfind("zone-two-bat", 0) == 0)
+        {
+            useSkinning = entity.placement.model->ApplyAnimation("Flying", absoluteTimeSeconds_);
+            if (!useSkinning)
+            {
+                useSkinning = entity.placement.model->ApplyAnimation("Rest", absoluteTimeSeconds_);
+            }
+        }
+        else if (lowerEntityName == "zone-one-enemy-hongo" || lowerEntityName == "zone-one-enemy-planta")
+        {
+            useSkinning = entity.placement.model->ApplyAnimation("idleblob", absoluteTimeSeconds_);
+            if (!useSkinning)
+            {
+                useSkinning = entity.placement.model->ApplyAnimation("Idle", absoluteTimeSeconds_);
+            }
+        }
+        shader.SetBool("useSkinning", useSkinning);
+        if (useSkinning)
+        {
+            entity.placement.model->UploadBoneMatrices(shader);
+        }
         shader.SetBool("useTexture", false);
         shader.SetMat4("model", BuildStaticModelMatrix(entity));
         entity.placement.model->DrawWithoutTextures();
+        shader.SetBool("useSkinning", false);
     }
 
     for (const InteractiveDoor& door : doors_)
@@ -3164,6 +3463,7 @@ void BaseScene::DrawShadowCasters(const ShaderProgram& shader) const
         }
 
         shader.SetBool("useTexture", false);
+        shader.SetBool("useSkinning", false);
         shader.SetMat4("model", BuildDoorModelMatrix(door));
         door.placement.model->DrawWithoutTextures();
     }
@@ -3171,15 +3471,64 @@ void BaseScene::DrawShadowCasters(const ShaderProgram& shader) const
     if (whispyState_ != WhispyState::Defeated && whispyFbxPreviewEnabled_ && whispyFbxPlacement_.model != nullptr)
     {
         shader.SetBool("useTexture", false);
+        shader.SetBool("useSkinning", false);
         shader.SetMat4("model", BuildWhispyFbxModelMatrix());
         whispyFbxPlacement_.model->DrawWithoutTextures();
     }
 
-    if (kirbyPlacement_.model != nullptr)
+    const bool useStableKirbyStatic = kirbyDebugMode_ == KirbyRenderDebugMode::StaticNoSkinning
+        || kirbyDebugMode_ == KirbyRenderDebugMode::ProceduralFallback;
+    const ModelPlacement* activeKirbyPlacement = useStableKirbyStatic && kirbyStaticPlacement_.model != nullptr
+        ? &kirbyStaticPlacement_
+        : &kirbyPlacement_;
+    if (activeKirbyPlacement->model != nullptr)
     {
+        std::string preferredClip = "Idle";
+        if (latestPlayer_.horizontalSpeed > 0.15f)
+        {
+            preferredClip = latestPlayer_.sprinting ? "Run" : "Walk";
+        }
+        bool useKirbySkinning = false;
+        if (!forceProceduralKirbyAnimation_)
+        {
+            if (kirbyDebugMode_ == KirbyRenderDebugMode::SkinningIdentityBones)
+            {
+                useKirbySkinning = activeKirbyPlacement->model->HasSkeletalAnimation();
+            }
+            else if (IsKirbyBindPoseMode(kirbyDebugMode_))
+            {
+                useKirbySkinning = activeKirbyPlacement->model->ApplyBindPose(KirbySkinningSpaceMode(kirbyDebugMode_));
+            }
+            else if (IsKirbyAnimatedMode(kirbyDebugMode_))
+            {
+                useKirbySkinning = activeKirbyPlacement->model->ApplyAnimation(
+                    preferredClip,
+                    absoluteTimeSeconds_,
+                    KirbySkinningSpaceMode(kirbyDebugMode_));
+            }
+        }
+        shader.SetBool("useSkinning", useKirbySkinning);
+        if (useKirbySkinning)
+        {
+            if (kirbyDebugMode_ == KirbyRenderDebugMode::SkinningIdentityBones)
+            {
+                activeKirbyPlacement->model->UploadIdentityBoneMatrices(shader);
+            }
+            else
+            {
+                activeKirbyPlacement->model->UploadBoneMatrices(shader);
+            }
+        }
+        const bool previousKirbySkinningFlag = kirbySkeletalAnimationThisFrame_;
+        const bool previousKirbyDisableProceduralFlag = kirbyDisableProceduralPoseThisFrame_;
+        kirbySkeletalAnimationThisFrame_ = useKirbySkinning;
+        kirbyDisableProceduralPoseThisFrame_ = kirbyDebugMode_ != KirbyRenderDebugMode::ProceduralFallback;
         shader.SetBool("useTexture", false);
         shader.SetMat4("model", BuildKirbyModelMatrix());
-        kirbyPlacement_.model->DrawWithoutTextures();
+        activeKirbyPlacement->model->DrawWithoutTextures();
+        shader.SetBool("useSkinning", false);
+        kirbySkeletalAnimationThisFrame_ = previousKirbySkinningFlag;
+        kirbyDisableProceduralPoseThisFrame_ = previousKirbyDisableProceduralFlag;
     }
 
     if (cubeMesh_ != nullptr)
@@ -3283,20 +3632,61 @@ void BaseScene::DrawKirby() const
         return;
     }
 
-    if (kirbyPlacement_.model != nullptr)
+    const bool useStableStatic = kirbyDebugMode_ == KirbyRenderDebugMode::StaticNoSkinning
+        || kirbyDebugMode_ == KirbyRenderDebugMode::ProceduralFallback;
+    const ModelPlacement* activeKirbyPlacement = useStableStatic && kirbyStaticPlacement_.model != nullptr
+        ? &kirbyStaticPlacement_
+        : &kirbyPlacement_;
+
+    if (activeKirbyPlacement->model != nullptr)
     {
         std::string preferredClip = "Idle";
         if (latestPlayer_.horizontalSpeed > 0.15f)
         {
             preferredClip = latestPlayer_.sprinting ? "Run" : "Walk";
         }
-        kirbySkeletalAnimationThisFrame_ = !forceProceduralKirbyAnimation_ && kirbyPlacement_.model->ApplyAnimation(preferredClip, absoluteTimeSeconds_);
+
+        kirbySkeletalAnimationThisFrame_ = false;
+        kirbyDisableProceduralPoseThisFrame_ = kirbyDebugMode_ != KirbyRenderDebugMode::ProceduralFallback;
+        switch (kirbyDebugMode_)
+        {
+            case KirbyRenderDebugMode::StaticNoSkinning:
+            case KirbyRenderDebugMode::ProceduralFallback:
+                kirbySkeletalAnimationThisFrame_ = false;
+                break;
+            case KirbyRenderDebugMode::SkinningIdentityBones:
+                kirbySkeletalAnimationThisFrame_ = !forceProceduralKirbyAnimation_ && activeKirbyPlacement->model->HasSkeletalAnimation();
+                break;
+            case KirbyRenderDebugMode::SkinningBindPose:
+            case KirbyRenderDebugMode::SkinningBindPoseNoGlobalInverse:
+            case KirbyRenderDebugMode::SkinningBindPoseScaleCompensated:
+                kirbySkeletalAnimationThisFrame_ = !forceProceduralKirbyAnimation_
+                    && activeKirbyPlacement->model->ApplyBindPose(KirbySkinningSpaceMode(kirbyDebugMode_));
+                break;
+            case KirbyRenderDebugMode::SkinningAnimated:
+            case KirbyRenderDebugMode::SkinningAnimatedNoGlobalInverse:
+            case KirbyRenderDebugMode::SkinningAnimatedScaleCompensated:
+                kirbySkeletalAnimationThisFrame_ = !forceProceduralKirbyAnimation_
+                    && activeKirbyPlacement->model->ApplyAnimation(
+                        preferredClip,
+                        absoluteTimeSeconds_,
+                        KirbySkinningSpaceMode(kirbyDebugMode_));
+                break;
+        }
+
         litShader_->SetBool("useSkinning", kirbySkeletalAnimationThisFrame_);
         if (kirbySkeletalAnimationThisFrame_)
         {
-            kirbyPlacement_.model->UploadBoneMatrices(*litShader_);
+            if (kirbyDebugMode_ == KirbyRenderDebugMode::SkinningIdentityBones)
+            {
+                activeKirbyPlacement->model->UploadIdentityBoneMatrices(*litShader_);
+            }
+            else
+            {
+                activeKirbyPlacement->model->UploadBoneMatrices(*litShader_);
+            }
         }
-        litShader_->SetBool("useTexture", kirbyPlacement_.model->HasTextures());
+        litShader_->SetBool("useTexture", activeKirbyPlacement->model->HasTextures());
         litShader_->SetFloat("specularStrength", 0.04f);
         litShader_->SetFloat("unlitFactor", 0.12f);
         litShader_->SetFloat("pointLightResponse", 0.8f);
@@ -3305,11 +3695,22 @@ void BaseScene::DrawKirby() const
         if (!kirbyDrawDiagnosticLogged_)
         {
             DebugLog::Info(
-                "KIRBY",
+                "KIRBY DEBUG",
                 "draw called=true useSkinning=", kirbySkeletalAnimationThisFrame_,
-                " loaded=", kirbyPlacement_.model->IsLoaded(),
-                " hasTextures=", kirbyPlacement_.model->HasTextures(),
-                " scale=", kirbyPlacement_.scale,
+                " currentMode=", KirbyModeName(kirbyDebugMode_),
+                " currentClip=", preferredClip,
+                " loaded=", activeKirbyPlacement->model->IsLoaded(),
+                " hasTextures=", activeKirbyPlacement->model->HasTextures(),
+                " meshCount=", activeKirbyPlacement->model->GetMeshCount(),
+                " animations=", activeKirbyPlacement->model->GetAnimationCount(),
+                " bones=", activeKirbyPlacement->model->GetBoneCount(),
+                " vertices=", activeKirbyPlacement->model->GetVertexCount(),
+                " verticesWithoutWeights=", activeKirbyPlacement->model->GetVerticesWithoutWeights(),
+                " nonUnitWeightVertices=", activeKirbyPlacement->model->GetNonUnitWeightVertexCount(),
+                " maxInfluences=", activeKirbyPlacement->model->GetMaxOriginalInfluences(),
+                " discardedInfluences=", activeKirbyPlacement->model->GetDiscardedInfluenceCount(),
+                " visualScale=", activeKirbyPlacement->scale,
+                " visualYaw=", kirbyVisualYawDegrees_,
                 " position=(",
                 latestPlayer_.position.x, ", ",
                 latestPlayer_.position.y, ", ",
@@ -3321,14 +3722,15 @@ void BaseScene::DrawKirby() const
             kirbyDrawDiagnosticLogged_ = true;
         }
         litShader_->SetMat4("model", kirbyModelMatrix);
-        if (!kirbyPlacement_.model->HasTextures())
+        if (!activeKirbyPlacement->model->HasTextures())
         {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, dirtTexture_);
         }
-        kirbyPlacement_.model->Draw();
+        activeKirbyPlacement->model->Draw();
         litShader_->SetBool("useSkinning", false);
         kirbySkeletalAnimationThisFrame_ = false;
+        kirbyDisableProceduralPoseThisFrame_ = false;
         return;
     }
 
@@ -3503,7 +3905,7 @@ void BaseScene::DrawLitGeometry() const
 
         bool useSkinning = false;
         const std::string lowerEntityName = ToLowerAscii(entity.name);
-        if (lowerEntityName == "zone-two-bat")
+        if (lowerEntityName.rfind("zone-two-bat", 0) == 0)
         {
             useSkinning = entity.placement.model->ApplyAnimation("Flying", absoluteTimeSeconds_);
             if (!useSkinning)

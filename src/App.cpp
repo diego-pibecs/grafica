@@ -446,10 +446,18 @@ void App::Update()
         pendingNavigationBuild_.reset();
     }
 
+    if (input_.WasKeyPressed(GLFW_KEY_Q))
+    {
+        DebugLog::Info("Update", "Q pressed, requesting window close");
+        glfwSetWindowShouldClose(window_, GLFW_TRUE);
+    }
+
     if (input_.WasKeyPressed(GLFW_KEY_ESCAPE))
     {
-        DebugLog::Info("Update", "ESC pressed, requesting window close");
-        glfwSetWindowShouldClose(window_, GLFW_TRUE);
+        paused_ = !paused_;
+        SetMouseCaptured(!paused_);
+        UpdateWindowTitle();
+        DebugLog::Info("Update", "ESC pressed, paused=", paused_);
     }
 
     if (input_.WasKeyPressed(GLFW_KEY_TAB))
@@ -468,12 +476,27 @@ void App::Update()
             "Update",
             "F3 pressed, physicsDebugEnabled=", physicsDebugEnabled_);
     }
+    if (input_.WasKeyPressed(GLFW_KEY_F6))
+    {
+        scene_->CycleKirbyDebugMode();
+        DebugLog::Info("Update", "F6 pressed, Kirby debug mode cycled");
+    }
+
+    if (paused_)
+    {
+        if (scene_ != nullptr)
+        {
+            scene_->SetKirbyCameraFacing(camera_.GetForward(), camera_.GetMode());
+        }
+        return;
+    }
 
     if (traceCurrentFrame_)
     {
         DebugLog::Info("Update", "camera_.Update()");
     }
     camera_.Update(input_);
+    scene_->SetKirbyCameraFacing(camera_.GetForward(), camera_.GetMode());
     if (input_.WasKeyPressed(GLFW_KEY_E))
     {
         const bool interacted = scene_->TryInteract(camera_.GetPosition(), camera_.GetForward(), player_.GetPosition());
@@ -602,8 +625,11 @@ void App::Render()
             2.75f,
             glm::vec3(1.0f, 0.88f, 0.34f),
             0.56f);
+        std::vector<std::string> centerLines = paused_
+            ? std::vector<std::string> { "PAUSA" }
+            : scene_->BuildCenterMessageLines();
         debugOverlayRenderer_->RenderAt(
-            scene_->BuildCenterMessageLines(),
+            centerLines,
             framebufferWidth_,
             framebufferHeight_,
             glm::vec2(0.0f, static_cast<float>(framebufferHeight_) * 0.42f),
@@ -663,7 +689,9 @@ void App::SetMouseCaptured(bool captured)
 
 void App::UpdateWindowTitle() const
 {
-    glfwSetWindowTitle(window_, "Kirby Vegetable Valley - Laboratorio P1");
+    glfwSetWindowTitle(window_, paused_
+        ? "Kirby Vegetable Valley - Laboratorio P1 [PAUSA]"
+        : "Kirby Vegetable Valley - Laboratorio P1");
 }
 
 void App::FramebufferSizeCallback(GLFWwindow* window, int width, int height)

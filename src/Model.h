@@ -20,11 +20,21 @@ struct ModelLoadOptions
 {
     std::string onlyNodeName;
     bool includeChildren = true;
+    bool bakeSkinnedMeshes = false;
+    bool preserveFbxPivots = true;
+    float globalScaleFactor = 1.0f;
 };
 
 class Model
 {
 public:
+    enum class SkinningSpaceMode
+    {
+        SceneRootInverse,
+        NoGlobalInverse,
+        RootScaleCompensated
+    };
+
     struct NamedBounds
     {
         std::string name;
@@ -46,8 +56,13 @@ public:
 
     void Draw() const;
     void DrawWithoutTextures() const;
-    bool ApplyAnimation(const std::string& preferredClipName, float timeSeconds);
+    bool ApplyAnimation(
+        const std::string& preferredClipName,
+        float timeSeconds,
+        SkinningSpaceMode spaceMode = SkinningSpaceMode::SceneRootInverse);
+    bool ApplyBindPose(SkinningSpaceMode spaceMode = SkinningSpaceMode::SceneRootInverse);
     void UploadBoneMatrices(const ShaderProgram& shader) const;
+    void UploadIdentityBoneMatrices(const ShaderProgram& shader) const;
 
     [[nodiscard]] bool IsLoaded() const noexcept;
     [[nodiscard]] bool HasTextures() const noexcept;
@@ -58,6 +73,14 @@ public:
     [[nodiscard]] glm::vec3 GetSize() const noexcept;
     [[nodiscard]] const std::vector<NamedBounds>& GetNamedBounds() const noexcept;
     [[nodiscard]] const std::vector<NodeMarker>& GetNodeMarkers() const noexcept;
+    [[nodiscard]] std::size_t GetMeshCount() const noexcept;
+    [[nodiscard]] std::size_t GetAnimationCount() const noexcept;
+    [[nodiscard]] std::size_t GetBoneCount() const noexcept;
+    [[nodiscard]] std::size_t GetVertexCount() const noexcept;
+    [[nodiscard]] std::size_t GetVerticesWithoutWeights() const noexcept;
+    [[nodiscard]] std::size_t GetNonUnitWeightVertexCount() const noexcept;
+    [[nodiscard]] int GetMaxOriginalInfluences() const noexcept;
+    [[nodiscard]] std::size_t GetDiscardedInfluenceCount() const noexcept;
     static void InspectAssimpScene(const std::filesystem::path& path);
 
 private:
@@ -66,6 +89,8 @@ private:
     struct BoneInfo
     {
         int id = -1;
+        std::string nodeName;
+        std::string key;
         glm::mat4 offset { 1.0f };
     };
 
@@ -119,8 +144,11 @@ private:
     ModelLoadOptions loadOptions_;
     AnimationNode rootAnimationNode_;
     std::unordered_map<std::string, BoneInfo> boneInfoMap_;
+    std::unordered_map<std::string, std::vector<int>> boneIdsByNodeName_;
+    std::vector<BoneInfo> boneInfosById_;
     std::vector<AnimationClip> animationClips_;
     std::vector<glm::mat4> finalBoneMatrices_;
+    std::vector<std::string> boneNamesById_;
     glm::mat4 globalInverseTransform_ { 1.0f };
     std::string activeAnimationClip_;
     int boneCounter_ = 0;
@@ -134,6 +162,13 @@ private:
     std::size_t removedDegenerateTriangleCount_ = 0;
     std::size_t animationCount_ = 0;
     std::size_t boneCount_ = 0;
+    std::size_t vertexCount_ = 0;
+    std::size_t verticesWithoutWeights_ = 0;
+    std::size_t nonUnitWeightVertices_ = 0;
+    std::size_t discardedInfluences_ = 0;
+    int maxOriginalInfluences_ = 0;
+    bool kirbyScaleDiagnosticsLogged_ = false;
+    mutable std::unordered_set<std::string> kirbyLoggedScaleLabels_;
 
     struct QuantizedTriangleKeyHash
     {
@@ -160,7 +195,21 @@ private:
     [[nodiscard]] const AnimationClip* FindAnimationClip(const std::string& preferredClipName) const;
     [[nodiscard]] bool AnimationNodeContains(const AnimationNode& node, const std::string& name) const;
     [[nodiscard]] bool ClipHasChannelForNode(const std::string& nodeName) const;
-    void CalculateBoneTransform(const AnimationNode& node, const glm::mat4& parentTransform, const AnimationClip& clip, float animationTime);
+    void CalculateBoneTransform(
+        const AnimationNode& node,
+        const glm::mat4& parentTransform,
+        const AnimationClip& clip,
+        float animationTime,
+        SkinningSpaceMode spaceMode);
+    void CalculateBindPoseTransform(
+        const AnimationNode& node,
+        const glm::mat4& parentTransform,
+        SkinningSpaceMode spaceMode);
+    [[nodiscard]] glm::mat4 BuildFinalBoneMatrix(
+        const glm::mat4& globalTransform,
+        const glm::mat4& offset,
+        SkinningSpaceMode spaceMode) const;
+    void LogKirbyScaleDiagnostics(const std::string& label) const;
     [[nodiscard]] glm::mat4 InterpolateChannelTransform(const BoneChannel& channel, float animationTime) const;
     void ProcessNode(
         struct aiNode* node,

@@ -52,6 +52,22 @@ public:
     void TriggerKeyframeAnimation();
     void TriggerKirbyEntranceAnimation();
     void ToggleWhispyVariant();
+    void SetKirbyCameraFacing(const glm::vec3& forward, CameraMode mode);
+    void SetKirbyCameraForward(const glm::vec3& forward);
+    void CycleKirbyDebugMode();
+
+    enum class KirbyRenderDebugMode
+    {
+        StaticNoSkinning,
+        SkinningIdentityBones,
+        SkinningBindPose,
+        SkinningBindPoseNoGlobalInverse,
+        SkinningBindPoseScaleCompensated,
+        SkinningAnimated,
+        SkinningAnimatedNoGlobalInverse,
+        SkinningAnimatedScaleCompensated,
+        ProceduralFallback
+    };
 
     [[nodiscard]] const std::string& GetActiveModelLabel() const noexcept;
     [[nodiscard]] glm::vec3 GetSceneBoundsMin() const noexcept;
@@ -222,11 +238,14 @@ private:
     glm::vec3 enemyMushroomPosition_ { -3.0f, 0.0f, 12.3f };
     glm::vec3 enemyMushroomPatrolA_ { -3.0f, 0.0f, 12.3f };
     glm::vec3 enemyMushroomPatrolB_ { -5.5f, 0.0f, -0.24f };
-    glm::vec3 enemyPlantPosition_ { 5.6f, 0.0f, 11.5f };
-    glm::vec3 enemyPlantPatrolA_ { 5.6f, 0.0f, 11.5f };
-    glm::vec3 enemyPlantPatrolB_ { 8.5f, 0.0f, 1.5f };
+    glm::vec3 enemyPlantPosition_ { 7.21f, 0.0f, 12.9f };
+    glm::vec3 enemyPlantPatrolA_ { 7.21f, 0.0f, 12.9f };
+    glm::vec3 enemyPlantPatrolB_ { 4.3f, 0.0f, 4.0f };
+    glm::vec3 enemyPlantPatrolC_ { 4.5f, 0.0f, -5.65f };
     glm::vec3 batPosition_ { 68.8f, 3.2f, 2.4f };
     glm::vec3 batBasePosition_ { 68.8f, 3.2f, 2.4f };
+    glm::vec3 batBPosition_ { 71.2f, 5.0f, -14.6f };
+    glm::vec3 batBBasePosition_ { 71.2f, 5.0f, -14.6f };
     float playerSpawnYawDegrees_ = -90.0f;
     float portalTargetYawDegrees_ = -90.0f;
     float pendingTeleportYawDegrees_ = -90.0f;
@@ -235,20 +254,31 @@ private:
     float enemyPlantPatrolSpeed_ = 0.95f;
     int enemyMushroomPatrolDirection_ = 1;
     int enemyPlantPatrolDirection_ = 1;
+    int enemyPlantPatrolTargetIndex_ = 1;
+    int enemyPlantPatrolStep_ = 1;
     float batPatrolOffsetX_ = 0.0f;
+    float batBPatrolOffsetX_ = 0.0f;
     float batPatrolSpeed_ = 1.35f;
+    float batBPatrolSpeed_ = 1.10f;
     int batPatrolDirection_ = 1;
+    int batBPatrolDirection_ = -1;
     float kirbyVisualYawDegrees_ = -90.0f;
     float kirbyTurnSpeed_ = 8.5f;
-    bool forceProceduralKirbyAnimation_ = true;
+    // Kirby's FBX faces local -Z after import; the placement yawOffset handles that model-space correction.
+    float kirbyModelForwardOffsetDegrees_ = 180.0f;
+    bool forceProceduralKirbyAnimation_ = false;
+    glm::vec3 kirbyCameraForward_ { 0.0f, 0.0f, -1.0f };
+    CameraMode kirbyCameraMode_ = CameraMode::Fps;
     TurnAnimation kirbyTurn_;
     TurnAnimation enemyMushroomTurn_;
     TurnAnimation enemyPlantTurn_;
     TurnAnimation batTurn_;
+    TurnAnimation batBTurn_;
     GLuint dirtTexture_ = 0;
     GLuint skyCloudTextureA_ = 0;
     GLuint skyCloudTextureB_ = 0;
     ModelPlacement kirbyPlacement_;
+    ModelPlacement kirbyStaticPlacement_;
     ModelPlacement whispyFbxPlacement_;
     std::vector<SceneEntity> entities_;
     std::vector<InteractiveDoor> doors_;
@@ -269,6 +299,7 @@ private:
     float lastFallRespawnTime_ = -100.0f;
     TimedMessage timedMessage_;
     std::string contextMessage_;
+    std::string lastDamageMessage_;
     std::string lastParkourGuideSurface_;
     SceneZone currentZone_ = SceneZone::Entrance;
     SceneZone previousZone_ = SceneZone::Entrance;
@@ -309,7 +340,9 @@ private:
     mutable bool pointShadowMapsDirty_ = true;
     mutable bool renderKirbyThisFrame_ = false;
     mutable bool kirbySkeletalAnimationThisFrame_ = false;
+    mutable bool kirbyDisableProceduralPoseThisFrame_ = false;
     mutable bool kirbyDrawDiagnosticLogged_ = false;
+    mutable KirbyRenderDebugMode kirbyDebugMode_ = KirbyRenderDebugMode::SkinningAnimated;
     mutable bool zoneTwoViewThisFrame_ = false;
     mutable RenderPerfStats renderPerfStats_;
 
@@ -325,7 +358,8 @@ private:
         float yawOffsetDegrees,
         bool normalizeToHeight,
         bool loadTextures = true,
-        bool contributesToCollision = true);
+        bool contributesToCollision = true,
+        const ModelLoadOptions& loadOptions = ModelLoadOptions {});
     void RegisterStaticCollisionSource(const SceneEntity& entity);
     void AddSceneBlocker(const std::string& name, const glm::vec3& center, const glm::vec3& halfExtents, float yawDegrees = 0.0f);
     void AddPrimitivePlatform(const std::string& name, const glm::vec3& center, const glm::vec3& size, const glm::vec3& color);
@@ -338,7 +372,8 @@ private:
         float targetSize,
         float yawOffsetDegrees,
         bool normalizeToHeight,
-        bool loadTextures = true);
+        bool loadTextures = true,
+        const ModelLoadOptions& loadOptions = ModelLoadOptions {});
     [[nodiscard]] glm::mat4 BuildStaticModelMatrix(const SceneEntity& entity) const;
     [[nodiscard]] glm::mat4 BuildDoorModelMatrix(const InteractiveDoor& door) const;
     [[nodiscard]] glm::mat4 BuildKirbyModelMatrix() const;
