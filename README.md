@@ -46,7 +46,6 @@ Si el programa no encuentra algun asset, revisa que se este ejecutando desde la 
 - `ESC`: pausar o reanudar.
 - `Q`: cerrar el programa.
 - `F3`: mostrar informacion de debug.
-- `F6`: cambiar modos de diagnostico de Kirby.
 
 ## Que incluye
 
@@ -64,5 +63,3 @@ Si el programa no encuentra algun asset, revisa que se este ejecutando desde la 
 ## Notas
 
 El proyecto fue preparado y probado principalmente en macOS. Puede compilar en otros sistemas si las dependencias estan disponibles, pero no fue el entorno principal de desarrollo.
-
-No se usa ReactPhysics3D en la implementacion actual.
