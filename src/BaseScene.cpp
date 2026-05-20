@@ -181,6 +181,17 @@ bool RayIntersectsSphere(
     return true;
 }
 
+bool IsRayTargetingDropZone(
+    const glm::vec3& rayOrigin,
+    const glm::vec3& rayDirection,
+    const glm::vec3& dropZonePosition,
+    float maxDistance)
+{
+    float hitDistance = 0.0f;
+    const glm::vec3 target = dropZonePosition + glm::vec3(0.0f, 0.85f, 0.0f);
+    return RayIntersectsSphere(rayOrigin, rayDirection, target, 1.35f, maxDistance, hitDistance);
+}
+
 float DoorEasedProgress(float openProgress)
 {
     return openProgress * openProgress * (3.0f - (2.0f * openProgress));
@@ -417,6 +428,78 @@ void BaseScene::Update(const PlayerSnapshot& player, float absoluteTimeSeconds, 
         {
             door.openProgress = std::max(target, door.openProgress - (door.animationSpeed * dt));
         }
+    }
+}
+
+void BaseScene::UpdateHoldAction(
+    bool cancelRequested,
+    const glm::vec3& rayOrigin,
+    const glm::vec3& rayDirection,
+    const glm::vec3& playerPosition,
+    float deltaTimeSeconds)
+{
+    if (activeHoldAction_ == HoldActionType::None)
+    {
+        return;
+    }
+
+    const float playerDistance = glm::length(playerPosition - activeHoldTargetPosition_);
+    float hitDistance = 0.0f;
+    const bool stillTargeting = RayIntersectsSphere(
+        rayOrigin,
+        rayDirection,
+        activeHoldTargetPosition_,
+        0.55f,
+        6.0f,
+        hitDistance);
+    if (cancelRequested || playerDistance > 2.0f || !stillTargeting)
+    {
+        CancelHoldAction();
+        return;
+    }
+
+    const float dt = std::clamp(deltaTimeSeconds, 0.0f, 0.1f);
+    holdActionProgress_ = std::min(holdActionDuration_, holdActionProgress_ + dt);
+    if (holdActionProgress_ < holdActionDuration_)
+    {
+        return;
+    }
+
+    if (activeHoldAction_ == HoldActionType::HandWash)
+    {
+        for (FaucetInteraction& faucet : faucetInteractions_)
+        {
+            if (faucet.id == activeHoldTargetId_)
+            {
+                faucet.used = true;
+                break;
+            }
+        }
+        activeHoldAction_ = HoldActionType::None;
+        activeHoldTargetId_.clear();
+        holdActionProgress_ = 0.0f;
+        ReduceAnxiety(22.0f);
+        SetStoryPhase(StoryPhase::HandWashedRelief);
+        ShowCenterMessage({ "TE LIMPIASTE UN POCO", "PERO LA SENSACION SIGUE AHI" }, 5.0f);
+        return;
+    }
+
+    if (activeHoldAction_ == HoldActionType::Shower)
+    {
+        for (FaucetInteraction& faucet : faucetInteractions_)
+        {
+            if (faucet.id == activeHoldTargetId_)
+            {
+                faucet.used = true;
+                break;
+            }
+        }
+        activeHoldAction_ = HoldActionType::None;
+        activeHoldTargetId_.clear();
+        holdActionProgress_ = 0.0f;
+        ReduceAnxiety(38.0f);
+        SetStoryPhase(StoryPhase::ShowerRelief);
+        ShowCenterMessage({ "TE LIMPIASTE MAS A FONDO", "LA SENSACION BAJA POR UN MOMENTO" }, 5.0f);
     }
 }
 
@@ -740,7 +823,17 @@ void BaseScene::SetPhysicsDebugEnabled(bool enabled)
 
 bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition)
 {
-    if (TryDiscardCarriedObject(playerPosition))
+    if (activeHoldAction_ != HoldActionType::None)
+    {
+        return false;
+    }
+
+    if (TryUseFaucet(rayOrigin, rayDirection, playerPosition))
+    {
+        return true;
+    }
+
+    if (TryDiscardCarriedObject(rayOrigin, rayDirection, playerPosition))
     {
         return true;
     }
@@ -750,7 +843,7 @@ bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDire
         return true;
     }
 
-    if (carriedObjectIndex_ < 0)
+    if (carriedObjectIndex_ < 0 && CarryablesEnabled())
     {
         const int carryableIndex = FindTargetedCarryable(rayOrigin, rayDirection, playerPosition);
         if (carryableIndex >= 0 && TryPickupCarryable(carryableIndex))
@@ -831,10 +924,13 @@ std::vector<std::string> BaseScene::BuildHudLines() const
         lines.push_back("ANSIEDAD [----------------] 0%");
     }
 
-    lines.push_back("OBJETOS EN BASURERO: " + std::to_string(discardedCount_) + " / " + std::to_string(requiredDiscardCount_));
-    if (carriedObjectIndex_ >= 0 && carriedObjectIndex_ < static_cast<int>(carryableObjects_.size()))
+    if (CarryablesEnabled())
     {
-        lines.push_back("LLEVANDO: " + carryableObjects_[static_cast<std::size_t>(carriedObjectIndex_)].displayName);
+        lines.push_back("OBJETOS EN BASURERO: " + std::to_string(discardedCount_) + " / " + std::to_string(requiredDiscardCount_));
+        if (carriedObjectIndex_ >= 0 && carriedObjectIndex_ < static_cast<int>(carryableObjects_.size()))
+        {
+            lines.push_back("LLEVANDO: " + carryableObjects_[static_cast<std::size_t>(carriedObjectIndex_)].displayName);
+        }
     }
 
     if (darkReflectionUnlocked_)
@@ -844,11 +940,11 @@ std::vector<std::string> BaseScene::BuildHudLines() const
     return lines;
 }
 
-std::vector<std::string> BaseScene::BuildContextMessageLines() const
+std::vector<std::string> BaseScene::BuildObjectiveLines() const
 {
     if (carriedObjectIndex_ >= 0)
     {
-        return { "VE AL BASURERO", "PRESIONA E PARA TIRAR EN BASURERO" };
+        return { "VE AL BASURERO" };
     }
 
     if (currentPhase_ == StoryPhase::ExteriorStart)
@@ -859,18 +955,114 @@ std::vector<std::string> BaseScene::BuildContextMessageLines() const
     {
         return { "SIGUE EL CAMINO", "NO PUEDES QUITAR LA SENSACION" };
     }
-    if (currentPhase_ == StoryPhase::HouseEntry)
+    if (currentPhase_ == StoryPhase::NeedHandWash)
     {
-        return { "PRESIONA E PARA ABRIR", "ENTRA A LA CASA" };
+        return { "LAVATE LAS MANOS" };
     }
-    if (currentPhase_ == StoryPhase::CleaningLoop || currentPhase_ == StoryPhase::DiscardLoop)
+    if (currentPhase_ == StoryPhase::HandWashing)
     {
-        return { "APUNTA A UN OBJETO", "PRESIONA E PARA RECOGER", "PRESIONA E PARA ENCENDER LUZ" };
+        return { "NO TE MUEVAS" };
+    }
+    if (currentPhase_ == StoryPhase::HandWashedRelief)
+    {
+        return { "LA SENSACION SIGUE AHI" };
+    }
+    if (currentPhase_ == StoryPhase::NeedShower)
+    {
+        return { "VE A LA REGADERA" };
+    }
+    if (currentPhase_ == StoryPhase::Showering)
+    {
+        return { "NO TE MUEVAS" };
+    }
+    if (currentPhase_ == StoryPhase::ShowerRelief)
+    {
+        return { "RESPIRA UN MOMENTO" };
+    }
+    if (currentPhase_ == StoryPhase::NeedDiscardObjects || currentPhase_ == StoryPhase::DiscardLoop)
+    {
+        return { "BUSCA OBJETOS PARA SACAR" };
     }
     if (currentPhase_ == StoryPhase::DarkReflection)
     {
         return { "EL SILENCIO SE VUELVE VISIBLE" };
     }
+    return {};
+}
+
+std::vector<std::string> BaseScene::BuildContextMessageLines() const
+{
+    return BuildObjectiveLines();
+}
+
+std::vector<std::string> BaseScene::BuildRaycastPromptLines(
+    const glm::vec3& rayOrigin,
+    const glm::vec3& rayDirection,
+    const glm::vec3& playerPosition) const
+{
+    if (activeHoldAction_ != HoldActionType::None)
+    {
+        return { BuildHoldActionProgressLine() };
+    }
+
+    const int faucetIndex = FindTargetedFaucet(rayOrigin, rayDirection, playerPosition);
+    if (faucetIndex >= 0)
+    {
+        const FaucetInteraction& faucet = faucetInteractions_[static_cast<std::size_t>(faucetIndex)];
+        if (faucet.type == HoldActionType::HandWash && currentPhase_ == StoryPhase::NeedHandWash)
+        {
+            return { "PRESIONA E PARA LAVARTE LAS MANOS" };
+        }
+        if (faucet.type == HoldActionType::Shower && currentPhase_ == StoryPhase::NeedShower)
+        {
+            return { "PRESIONA E PARA BANARTE" };
+        }
+    }
+
+    if (carriedObjectIndex_ >= 0
+        && IsPlayerNearDropZone(playerPosition)
+        && IsRayTargetingDropZone(rayOrigin, rayDirection, dumpsterDropZone_.position, 7.0f))
+    {
+        return { "PRESIONA E PARA TIRAR EN BASURERO" };
+    }
+
+    if (CarryablesEnabled()
+        && carriedObjectIndex_ < 0
+        && FindTargetedCarryable(rayOrigin, rayDirection, playerPosition) >= 0)
+    {
+        return { "PRESIONA E PARA RECOGER" };
+    }
+
+    if (FindTargetedHouseLight(rayOrigin, rayDirection, playerPosition) >= 0)
+    {
+        return { "PRESIONA E PARA ENCENDER LUZ" };
+    }
+
+    constexpr float kMaxDoorRayDistance = 4.2f;
+    for (const InteractiveDoor& door : doors_)
+    {
+        if (door.placement.model == nullptr)
+        {
+            continue;
+        }
+
+        const WalkableBlocker blocker = BuildDoorBlocker(door);
+        const glm::vec2 player(playerPosition.x, playerPosition.z);
+        const glm::vec2 center(blocker.center.x, blocker.center.z);
+        const float playerDistance = glm::length(player - center);
+        const float doorReach = door.interactRadius + std::max(blocker.halfExtents.x, blocker.halfExtents.z);
+        if (playerDistance > doorReach)
+        {
+            continue;
+        }
+
+        float hitDistance = 0.0f;
+        if (RayIntersectsDoorBlocker(rayOrigin, rayDirection, blocker, kMaxDoorRayDistance, hitDistance))
+        {
+            return { door.open ? "PRESIONA E PARA CERRAR" : "PRESIONA E PARA ABRIR" };
+        }
+    }
+
     return {};
 }
 
@@ -1008,6 +1200,15 @@ bool BaseScene::IsPhaseAtLeast(StoryPhase phase) const noexcept
     return static_cast<int>(currentPhase_) >= static_cast<int>(phase);
 }
 
+bool BaseScene::CarryablesEnabled() const noexcept
+{
+    return currentPhase_ == StoryPhase::NeedDiscardObjects
+        || currentPhase_ == StoryPhase::DiscardLoop
+        || currentPhase_ == StoryPhase::EmptyHouse
+        || currentPhase_ == StoryPhase::DarkReflection
+        || currentPhase_ == StoryPhase::Finished;
+}
+
 void BaseScene::AddNarrativeTrigger(
     const std::string& id,
     const glm::vec3& position,
@@ -1061,6 +1262,34 @@ std::string BaseScene::BuildAnxietyBar(float value) const
     return bar;
 }
 
+std::string BaseScene::BuildHoldActionProgressLine() const
+{
+    const char* label = activeHoldAction_ == HoldActionType::Shower
+        ? "BANANDOTE"
+        : "LAVANDO MANOS";
+    constexpr int kSegments = 10;
+    const float normalized = holdActionDuration_ > 0.001f
+        ? std::clamp(holdActionProgress_ / holdActionDuration_, 0.0f, 1.0f)
+        : 0.0f;
+    const int filled = static_cast<int>(std::round(normalized * static_cast<float>(kSegments)));
+
+    std::string line = label;
+    line += " [";
+    for (int index = 0; index < kSegments; ++index)
+    {
+        line += index < filled ? '#' : '-';
+    }
+    line += "]";
+    return line;
+}
+
+void BaseScene::SetStoryPhase(StoryPhase phase)
+{
+    currentPhase_ = phase;
+    storyPhaseStartTime_ = absoluteTimeSeconds_;
+    DebugLog::Info("Story", "phase=", static_cast<int>(currentPhase_), " time=", storyPhaseStartTime_);
+}
+
 void BaseScene::UpdateStoryState(const PlayerSnapshot& player, float deltaTimeSeconds)
 {
     if (centerMessage_.remainingSeconds > 0.0f)
@@ -1086,25 +1315,44 @@ void BaseScene::UpdateStoryState(const PlayerSnapshot& player, float deltaTimeSe
         }
 
         trigger.activated = true;
-        currentPhase_ = trigger.nextPhase;
+        SetStoryPhase(trigger.nextPhase);
         ActivateAnxiety(trigger.anxietyDelta);
-        ShowCenterMessage(trigger.messages, 4.5f);
+        if (!trigger.messages.empty())
+        {
+            ShowCenterMessage(trigger.messages, 4.5f);
+        }
         DebugLog::Info("Story", "Trigger activated ", trigger.id, " anxiety=", anxietyLevel_);
     }
 
-    if (currentPhase_ == StoryPhase::HouseEntry && player.position.z < -11.0f)
+    if (currentPhase_ == StoryPhase::HandWashedRelief && absoluteTimeSeconds_ - storyPhaseStartTime_ >= 4.5f)
     {
-        currentPhase_ = StoryPhase::CleaningLoop;
-        ShowCenterMessage({ "DENTRO, LA URGENCIA CRECE", "RETIRA OBJETOS Y LLEVALOS AL BASURERO" }, 5.0f);
+        SetStoryPhase(StoryPhase::NeedShower);
+        ActivateAnxiety(18.0f);
+        ShowCenterMessage({ "LA ANSIEDAD AUMENTA", "NECESITAS BANARTE" }, 4.2f);
     }
 
-    if (currentPhase_ == StoryPhase::CleaningLoop || currentPhase_ == StoryPhase::DiscardLoop)
+    if (currentPhase_ == StoryPhase::ShowerRelief && absoluteTimeSeconds_ - storyPhaseStartTime_ >= 15.0f)
     {
-        const float riseRate = currentPhase_ == StoryPhase::CleaningLoop ? 4.0f : 3.0f;
+        SetStoryPhase(StoryPhase::NeedDiscardObjects);
+        ActivateAnxiety(24.0f);
+        ShowCenterMessage(
+            {
+                "SIGUES PENSANDO EN ESE CUERPO Y LA SANGRE",
+                "TODAVIA SIENTES QUE LA CASA ESTA SUCIA"
+            },
+            5.5f);
+    }
+
+    if (currentPhase_ == StoryPhase::NeedHandWash
+        || currentPhase_ == StoryPhase::NeedShower
+        || currentPhase_ == StoryPhase::NeedDiscardObjects
+        || currentPhase_ == StoryPhase::DiscardLoop)
+    {
+        const float riseRate = currentPhase_ == StoryPhase::DiscardLoop ? 3.0f : 2.2f;
         anxietyLevel_ = std::clamp(anxietyLevel_ + (riseRate * deltaTimeSeconds), 0.0f, 100.0f);
         if (anxietyLevel_ > 82.0f && centerMessage_.remainingSeconds <= 0.0f)
         {
-            ShowCenterMessage({ "LA ANSIEDAD AUMENTA", "NECESITAS LIMPIAR" }, 3.0f);
+            ShowCenterMessage({ "LA ANSIEDAD AUMENTA", "NECESITAS DESCONTAMINAR" }, 3.0f);
         }
     }
 
@@ -1189,6 +1437,101 @@ int BaseScene::FindTargetedHouseLight(const glm::vec3& rayOrigin, const glm::vec
     }
 
     return bestIndex;
+}
+
+int BaseScene::FindTargetedFaucet(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition) const
+{
+    int bestIndex = -1;
+    float bestHitDistance = std::numeric_limits<float>::max();
+    constexpr float kMaxRayDistance = 6.0f;
+
+    for (std::size_t index = 0; index < faucetInteractions_.size(); ++index)
+    {
+        const FaucetInteraction& faucet = faucetInteractions_[index];
+        const bool phaseMatches =
+            (faucet.type == HoldActionType::HandWash && currentPhase_ == StoryPhase::NeedHandWash)
+            || (faucet.type == HoldActionType::Shower && currentPhase_ == StoryPhase::NeedShower)
+            || (activeHoldAction_ != HoldActionType::None && faucet.id == activeHoldTargetId_);
+        if (!phaseMatches)
+        {
+            continue;
+        }
+
+        const float playerDistance = glm::length(playerPosition - faucet.position);
+        if (playerDistance > faucet.radius + 0.75f)
+        {
+            continue;
+        }
+
+        float hitDistance = 0.0f;
+        if (RayIntersectsSphere(rayOrigin, rayDirection, faucet.position, 0.55f, kMaxRayDistance, hitDistance)
+            && hitDistance < bestHitDistance)
+        {
+            bestHitDistance = hitDistance;
+            bestIndex = static_cast<int>(index);
+        }
+    }
+
+    return bestIndex;
+}
+
+bool BaseScene::TryUseFaucet(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition)
+{
+    const int faucetIndex = FindTargetedFaucet(rayOrigin, rayDirection, playerPosition);
+    if (faucetIndex < 0)
+    {
+        return false;
+    }
+
+    FaucetInteraction& faucet = faucetInteractions_[static_cast<std::size_t>(faucetIndex)];
+    if (faucet.type == HoldActionType::HandWash && currentPhase_ == StoryPhase::NeedHandWash)
+    {
+        activeHoldAction_ = HoldActionType::HandWash;
+        activeHoldTargetId_ = faucet.id;
+        activeHoldTargetPosition_ = faucet.position;
+        holdActionProgress_ = 0.0f;
+        holdActionDuration_ = 5.0f;
+        SetStoryPhase(StoryPhase::HandWashing);
+        DebugLog::Info("HOLD ACTION", "started hand wash target=", faucet.id);
+        return true;
+    }
+
+    if (faucet.type == HoldActionType::Shower && currentPhase_ == StoryPhase::NeedShower)
+    {
+        activeHoldAction_ = HoldActionType::Shower;
+        activeHoldTargetId_ = faucet.id;
+        activeHoldTargetPosition_ = faucet.position;
+        holdActionProgress_ = 0.0f;
+        holdActionDuration_ = 5.0f;
+        SetStoryPhase(StoryPhase::Showering);
+        DebugLog::Info("HOLD ACTION", "started shower target=", faucet.id);
+        return true;
+    }
+
+    return false;
+}
+
+void BaseScene::CancelHoldAction()
+{
+    if (activeHoldAction_ == HoldActionType::None)
+    {
+        return;
+    }
+
+    const HoldActionType previousAction = activeHoldAction_;
+    activeHoldAction_ = HoldActionType::None;
+    activeHoldTargetId_.clear();
+    activeHoldTargetPosition_ = glm::vec3(0.0f);
+    holdActionProgress_ = 0.0f;
+    if (previousAction == HoldActionType::HandWash)
+    {
+        SetStoryPhase(StoryPhase::NeedHandWash);
+    }
+    else if (previousAction == HoldActionType::Shower)
+    {
+        SetStoryPhase(StoryPhase::NeedShower);
+    }
+    DebugLog::Info("HOLD ACTION", "cancelled");
 }
 
 bool BaseScene::TryToggleHouseLight(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition)
@@ -1284,6 +1627,10 @@ bool BaseScene::TryPickupCarryable(int objectIndex)
     }
 
     CarryableObject& object = carryableObjects_[static_cast<std::size_t>(objectIndex)];
+    if (!CarryablesEnabled())
+    {
+        return false;
+    }
     if (!object.visible || object.pickedUp || object.discarded)
     {
         return false;
@@ -1295,9 +1642,9 @@ bool BaseScene::TryPickupCarryable(int objectIndex)
     object.blocksNavigation = false;
     carriedObjectIndex_ = objectIndex;
     StartTvFallIfNeeded(object);
-    if (currentPhase_ == StoryPhase::HouseEntry || currentPhase_ == StoryPhase::AnxietyActivated)
+    if (currentPhase_ == StoryPhase::NeedDiscardObjects)
     {
-        currentPhase_ = StoryPhase::CleaningLoop;
+        SetStoryPhase(StoryPhase::DiscardLoop);
     }
     ShowCenterMessage({ "LLEVANDO: " + object.displayName, "LLEVALO AL BASURERO" }, 3.0f);
     ReduceAnxiety(8.0f);
@@ -1305,9 +1652,11 @@ bool BaseScene::TryPickupCarryable(int objectIndex)
     return true;
 }
 
-bool BaseScene::TryDiscardCarriedObject(const glm::vec3& playerPosition)
+bool BaseScene::TryDiscardCarriedObject(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition)
 {
-    if (carriedObjectIndex_ < 0 || !IsPlayerNearDropZone(playerPosition))
+    if (carriedObjectIndex_ < 0
+        || !IsPlayerNearDropZone(playerPosition)
+        || !IsRayTargetingDropZone(rayOrigin, rayDirection, dumpsterDropZone_.position, 7.0f))
     {
         return false;
     }
@@ -1319,7 +1668,7 @@ bool BaseScene::TryDiscardCarriedObject(const glm::vec3& playerPosition)
     object.blocksNavigation = false;
     carriedObjectIndex_ = -1;
     discardedCount_ += object.requiredForEmptyHouse ? 1 : 0;
-    currentPhase_ = StoryPhase::DiscardLoop;
+    SetStoryPhase(StoryPhase::DiscardLoop);
     ReduceAnxiety(18.0f);
     ShowCenterMessage({ "ALIVIO TEMPORAL", "EL ESPACIO SE VACIA" }, 3.2f);
     DebugLog::Info("CARRY", "discarded id=", object.id, " visible=", object.visible, " discarded=", discardedCount_, "/", requiredDiscardCount_);
@@ -1327,7 +1676,7 @@ bool BaseScene::TryDiscardCarriedObject(const glm::vec3& playerPosition)
     if (discardedCount_ >= requiredDiscardCount_ && !darkReflectionUnlocked_)
     {
         darkReflectionUnlocked_ = true;
-        currentPhase_ = StoryPhase::DarkReflection;
+        SetStoryPhase(StoryPhase::DarkReflection);
         ShowCenterMessage({ "EL ESPACIO QUEDA VACIO", "LA SENSACION COMIENZA A BAJAR" }, 6.0f);
     }
     return true;
@@ -1340,11 +1689,17 @@ void BaseScene::LoadEntities()
     doors_.clear();
     narrativeTriggers_.clear();
     carryableObjects_.clear();
+    faucetInteractions_.clear();
     carriedObjectIndex_ = -1;
     discardedCount_ = 0;
     cleanedCount_ = 0;
     currentPhase_ = StoryPhase::ExteriorStart;
+    storyPhaseStartTime_ = 0.0f;
     anxietyLevel_ = 0.0f;
+    activeHoldAction_ = HoldActionType::None;
+    activeHoldTargetId_.clear();
+    activeHoldTargetPosition_ = glm::vec3(0.0f);
+    holdActionProgress_ = 0.0f;
     tvFallActive_ = false;
     tvHasFallen_ = false;
     tvFallStartTime_ = 0.0f;
@@ -1377,12 +1732,35 @@ void BaseScene::ConfigureSceneLights()
 
         PointLight pointLight;
         pointLight.label = lowerName;
-        pointLight.position = ComputeStreetLightAnchor(entity);
+        bool foundPostLightNode = false;
+        if (entity.placement.model != nullptr)
+        {
+            const glm::mat4 entityTransform = BuildStaticModelMatrix(entity);
+            for (const Model::NamedNode& node : entity.placement.model->GetNamedNodes())
+            {
+                if (ToLowerAscii(node.name) == "light")
+                {
+                    pointLight.position = glm::vec3(entityTransform * node.transform * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+                    foundPostLightNode = true;
+                    break;
+                }
+            }
+        }
+        if (!foundPostLightNode)
+        {
+            pointLight.position = ComputeStreetLightAnchor(entity);
+        }
         pointLight.color = glm::vec3(1.0f, 0.88f, 0.64f);
-        pointLight.intensity = 7.8f;
-        pointLight.range = 10.8f;
+        pointLight.intensity = 4.6f;
+        pointLight.range = 8.4f;
         pointLight.castsShadow = false;
         basePointLights_.push_back(pointLight);
+        DebugLog::Info(
+            "POST LIGHT",
+            "node=", foundPostLightNode ? "light" : "fallback-anchor",
+            " position=(",
+            pointLight.position.x, ", ", pointLight.position.y, ", ", pointLight.position.z,
+            ") point light created=true");
     }
 
     auto houseIterator = std::find_if(
@@ -1406,9 +1784,9 @@ void BaseScene::ConfigureSceneLights()
             houseLight.id = id;
             houseLight.position = glm::vec3(houseTransform * glm::vec4(localPosition, 1.0f));
             houseLight.color = proximity ? glm::vec3(1.0f, 0.78f, 0.56f) : glm::vec3(1.0f, 0.84f, 0.62f);
-            houseLight.intensity = interactable ? 2.10f : (proximity ? 1.25f : 2.15f);
+            houseLight.intensity = interactable ? 2.10f : (proximity ? 1.25f : 1.85f);
             houseLight.range = interactable ? 5.8f : (proximity ? 4.7f : 8.0f);
-            houseLight.activationDistance = interactable ? 8.5f : (proximity ? 8.5f : 120.0f);
+            houseLight.activationDistance = interactable ? 8.5f : (proximity ? 4.25f : 120.0f);
             houseLight.enabled = !interactable;
             houseLight.interactable = interactable;
             houseLight.proximity = proximity;
@@ -1597,6 +1975,32 @@ void BaseScene::LoadHouseDemo()
 
     LoadHouseDoors(houseEntity);
     LoadHouseCarryableObjects(houseEntity);
+    faucetInteractions_.clear();
+    const glm::mat4 houseTransform = BuildStaticModelMatrix(houseEntity);
+    for (const Model::NamedNode& node : houseEntity.placement.model->GetNamedNodes())
+    {
+        const std::string lowerNodeName = ToLowerAscii(node.name);
+        const bool isGrifo = lowerNodeName.rfind("grifo", 0) == 0;
+        const bool isRegadera = lowerNodeName == "regadera" || lowerNodeName.find("regadera") != std::string::npos;
+        if (!isGrifo && !isRegadera)
+        {
+            continue;
+        }
+
+        FaucetInteraction interaction;
+        interaction.id = lowerNodeName;
+        interaction.position = glm::vec3(houseTransform * node.transform * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+        interaction.radius = isRegadera ? 1.25f : 1.10f;
+        interaction.type = isRegadera ? HoldActionType::Shower : HoldActionType::HandWash;
+        faucetInteractions_.push_back(interaction);
+        DebugLog::Info(
+            "WASH NODE",
+            "node=", node.name,
+            " type=", isRegadera ? "regadera" : "grifo",
+            " position=(",
+            interaction.position.x, ", ", interaction.position.y, ", ", interaction.position.z,
+            ")");
+    }
     entities_.push_back(std::move(houseEntity));
     playerSpawnPosition_ = glm::vec3(0.0f, 0.0f, sceneBoundsMax_.z - 10.0f);
     playerSpawnYawDegrees_ = -90.0f;
@@ -1622,7 +2026,7 @@ void BaseScene::LoadExteriorDecorations()
         bool normalizeToHeight;
     };
 
-    const std::array<DecorationDesc, 30> decorations {
+    const std::vector<DecorationDesc> decorations {
         DecorationDesc { "tree-left-start", assetsRoot_ / "models" / "tree.fbx", glm::vec3(-13.8f, 0.0f, 26.5f), 18.0f, 7.0f, true },
         DecorationDesc { "tree-right-start", assetsRoot_ / "models" / "tree.fbx", glm::vec3(11.9f, 0.0f, 28.0f), -14.0f, 7.3f, true },
         DecorationDesc { "tree-left-upper", assetsRoot_ / "models" / "tree.fbx", glm::vec3(-12.2f, 0.0f, 18.0f), 47.0f, 6.8f, true },
@@ -1647,12 +2051,47 @@ void BaseScene::LoadExteriorDecorations()
         DecorationDesc { "rock-right-path", assetsRoot_ / "models" / "rocks" / "SM_Rocks_03.fbx", glm::vec3(7.2f, 0.0f, 13.0f), -36.0f, 1.8f, false },
         DecorationDesc { "rock-left-mid", assetsRoot_ / "models" / "rocks" / "SM_Rocks_02.fbx", glm::vec3(-7.0f, 0.0f, -7.0f), 54.0f, 1.5f, false },
         DecorationDesc { "rock-right-house", assetsRoot_ / "models" / "rocks" / "SM_Rocks_05.fbx", glm::vec3(7.0f, 0.0f, -25.0f), 72.0f, 1.7f, false },
-        DecorationDesc { "street-light-start", assetsRoot_ / "models" / "street-light" / "source" / "Street Light" / "SM Street Light.fbx", glm::vec3(11.0f, 0.0f, 25.0f), -90.0f, 5.8f, true },
-        DecorationDesc { "street-light-mid", assetsRoot_ / "models" / "street-light" / "source" / "Street Light" / "SM Street Light.fbx", glm::vec3(-11.0f, 0.0f, -4.0f), 90.0f, 5.5f, true },
+        DecorationDesc { "street-light-start", assetsRoot_ / "models" / "street-light" / "source" / "Street Light" / "SM Street Light.fbx", glm::vec3(4.4f, 0.0f, 22.3f), -90.0f, 5.8f, true },
         DecorationDesc { "dumpster-left", assetsRoot_ / "models" / "dumpster.fbx", glm::vec3(-13.35f, 0.0f, -7.74f), 178.0f, 2.8f, false },
         DecorationDesc { "flower-left-house", assetsRoot_ / "models" / "flower" / "source" / "x3.fbx", glm::vec3(-8.4f, 0.0f, -5.0f), 12.0f, 1.2f, true },
-        DecorationDesc { "flower-right-house", assetsRoot_ / "models" / "flower" / "source" / "x3.fbx", glm::vec3(8.4f, 0.0f, -5.5f), -18.0f, 1.2f, true },
-        DecorationDesc { "bush-back-right", assetsRoot_ / "models" / "bushes" / "BushWithBerrys03.fbx", glm::vec3(10.8f, 0.0f, -28.0f), 31.0f, 1.7f, true }
+        DecorationDesc { "bush-back-right", assetsRoot_ / "models" / "bushes" / "BushWithBerrys03.fbx", glm::vec3(10.8f, 0.0f, -28.0f), 31.0f, 1.7f, true },
+        DecorationDesc { "tree-request-01", assetsRoot_ / "models" / "tree.fbx", glm::vec3(0.2f, 0.0f, -1.0f), 38.0f, 6.2f, true },
+        DecorationDesc { "tree-request-02", assetsRoot_ / "models" / "tree.fbx", glm::vec3(5.4f, 0.0f, 1.3f), -42.0f, 6.4f, true },
+        DecorationDesc { "tree-request-03", assetsRoot_ / "models" / "tree.fbx", glm::vec3(7.2f, 0.0f, 8.2f), 71.0f, 6.5f, true },
+        DecorationDesc { "tree-request-04", assetsRoot_ / "models" / "tree.fbx", glm::vec3(5.1f, 0.0f, 13.98f), -28.0f, 6.4f, true },
+        DecorationDesc { "tree-request-05", assetsRoot_ / "models" / "tree.fbx", glm::vec3(8.8f, 0.0f, 23.67f), 16.0f, 6.5f, true },
+        DecorationDesc { "tree-request-06", assetsRoot_ / "models" / "tree.fbx", glm::vec3(-5.1f, 0.0f, 29.22f), -64.0f, 6.2f, true },
+        DecorationDesc { "tree-request-07", assetsRoot_ / "models" / "tree.fbx", glm::vec3(-6.8f, 0.0f, 16.8f), 97.0f, 6.3f, true },
+        DecorationDesc { "tree-request-08", assetsRoot_ / "models" / "tree.fbx", glm::vec3(-8.2f, 0.0f, 2.4f), -18.0f, 6.2f, true },
+        DecorationDesc { "nature-bush-01", assetsRoot_ / "models" / "bushes" / "BushWithBerrys02.fbx", glm::vec3(1.8f, 0.0f, -2.2f), 25.0f, 1.45f, true },
+        DecorationDesc { "nature-bush-02", assetsRoot_ / "models" / "bushes" / "Bush01.fbx", glm::vec3(6.8f, 0.0f, 2.8f), -34.0f, 1.40f, true },
+        DecorationDesc { "nature-bush-03", assetsRoot_ / "models" / "bushes" / "Bush02.fbx", glm::vec3(6.0f, 0.0f, 9.9f), 58.0f, 1.35f, true },
+        DecorationDesc { "nature-bush-04", assetsRoot_ / "models" / "bushes" / "BushWithBerrys01.fbx", glm::vec3(-6.0f, 0.0f, 18.5f), -12.0f, 1.45f, true },
+        DecorationDesc { "nature-bush-05", assetsRoot_ / "models" / "bushes" / "Bush03.fbx", glm::vec3(-7.4f, 0.0f, 4.8f), 41.0f, 1.35f, true },
+        DecorationDesc { "nature-grass-01", assetsRoot_ / "models" / "nature" / "grass_01.fbx", glm::vec3(2.4f, 0.0f, 0.8f), 0.0f, 0.95f, true },
+        DecorationDesc { "nature-grass-02", assetsRoot_ / "models" / "nature" / "grass_02.fbx", glm::vec3(6.4f, 0.0f, 7.0f), 18.0f, 0.90f, true },
+        DecorationDesc { "nature-grass-03", assetsRoot_ / "models" / "nature" / "grass_01.fbx", glm::vec3(-6.2f, 0.0f, 14.9f), -21.0f, 0.90f, true },
+        DecorationDesc { "nature-grass-04", assetsRoot_ / "models" / "nature" / "grass_02.fbx", glm::vec3(7.6f, 0.0f, 22.1f), 44.0f, 0.88f, true },
+        DecorationDesc { "nature-mushrooms-01", assetsRoot_ / "models" / "nature" / "mushrooms.fbx", glm::vec3(4.3f, 0.0f, 3.4f), -18.0f, 0.85f, true },
+        DecorationDesc { "nature-mushrooms-02", assetsRoot_ / "models" / "nature" / "mushrooms_02.fbx", glm::vec3(-7.8f, 0.0f, 1.0f), 31.0f, 0.82f, true },
+        DecorationDesc { "nature-flower-01", assetsRoot_ / "models" / "nature" / "flower.fbx", glm::vec3(5.8f, 0.0f, 14.8f), 12.0f, 0.80f, true },
+        DecorationDesc { "nature-flower-02", assetsRoot_ / "models" / "nature" / "flower.fbx", glm::vec3(-4.3f, 0.0f, 27.8f), -27.0f, 0.78f, true }
+    };
+
+    const auto blocksNavigation = [](std::string name)
+    {
+        name = ToLowerAscii(std::move(name));
+        if (name.find("flower") != std::string::npos
+            || name.find("grass") != std::string::npos
+            || name.find("mushroom") != std::string::npos)
+        {
+            return false;
+        }
+        return name.find("tree") != std::string::npos
+            || name.find("bush") != std::string::npos
+            || name.find("rock") != std::string::npos
+            || name.find("street-light") != std::string::npos
+            || name.find("dumpster") != std::string::npos;
     };
 
     for (const DecorationDesc& decoration : decorations)
@@ -1672,34 +2111,78 @@ void BaseScene::LoadExteriorDecorations()
             0.0f,
             decoration.normalizeToHeight,
             true,
-            ToLowerAscii(decoration.name).find("flower") == std::string::npos
-                && ToLowerAscii(decoration.name).find("bush") == std::string::npos);
+            blocksNavigation(decoration.name));
     }
 
     AddStaticSceneEntity(
-        "detonante-sangre",
+        "detonante-sangre-01",
         assetsRoot_ / "models" / "blood-spattered" / "source" / "sangre.fbx",
-        glm::vec3(-2.7f, 0.02f, 13.4f),
+        glm::vec3(-2.7f, -0.025f, 13.4f),
         8.0f,
-        4.2f,
+        3.0f,
+        0.0f,
+        false,
+        true);
+    AddStaticSceneEntity(
+        "detonante-sangre-02",
+        assetsRoot_ / "models" / "blood-spattered" / "source" / "sangre.fbx",
+        glm::vec3(-3.25f, -0.025f, 12.85f),
+        -24.0f,
+        2.8f,
+        0.0f,
+        false,
+        true);
+    AddStaticSceneEntity(
+        "detonante-sangre-03",
+        assetsRoot_ / "models" / "blood-spattered" / "source" / "sangre.fbx",
+        glm::vec3(-1.95f, -0.025f, 13.05f),
+        31.0f,
+        2.7f,
+        0.0f,
+        false,
+        true);
+    AddStaticSceneEntity(
+        "detonante-sangre-04",
+        assetsRoot_ / "models" / "blood-spattered" / "source" / "sangre.fbx",
+        glm::vec3(-2.35f, -0.025f, 14.25f),
+        83.0f,
+        2.9f,
         0.0f,
         false,
         true);
     AddStaticSceneEntity(
         "detonante-sleeping-bag-mummy",
         assetsRoot_ / "models" / "nuevos" / "sleeping bag" / "FBX" / "sleeping bag Mummy.fbx",
-        glm::vec3(3.7f, 0.0f, 8.8f),
+        glm::vec3(1.0f, 0.0f, 8.8f),
         -28.0f,
-        3.1f,
+        2.64f,
         0.0f,
         false,
         true);
     AddStaticSceneEntity(
-        "basura-inicial",
+        "basura-inicial-01",
         assetsRoot_ / "models" / "trash-bag" / "Trash_Bag_Pack_ve2hddjga_High.fbx",
-        glm::vec3(-4.8f, 0.0f, 5.4f),
+        glm::vec3(-13.2f, -0.04f, -5.5f),
         34.0f,
-        2.1f,
+        1.20f,
+        0.0f,
+        false,
+        true);
+    AddStaticSceneEntity(
+        "basura-inicial-02",
+        assetsRoot_ / "models" / "trash-bag" / "Trash_Bag_Pack_ve2hddjga_High.fbx",
+        glm::vec3(-13.25f, -0.045f, -1.67f),
+        -18.0f,
+        1.27f,
+        0.0f,
+        false,
+        true);
+    AddStaticSceneEntity(
+        "basura-inicial-03",
+        assetsRoot_ / "models" / "trash-bag" / "Trash_Bag_Pack_ve2hddjga_High.fbx",
+        glm::vec3(-11.88f, -0.04f, -8.86f),
+        61.0f,
+        1.16f,
         0.0f,
         false,
         true);
@@ -1717,13 +2200,12 @@ void BaseScene::LoadExteriorDecorations()
         34.0f);
     AddNarrativeTrigger(
         "trigger_body_or_scene",
-        glm::vec3(3.7f, 0.0f, 8.8f),
+        glm::vec3(1.0f, 0.0f, 8.8f),
         3.5f,
         StoryPhase::TriggerWalk,
         StoryPhase::AnxietyActivated,
         {
-            "LA IMAGEN SE QUEDA EN TU CABEZA",
-            "NECESITAS LIMPIAR"
+            "LA IMAGEN DE ESE CUERPO SE QUEDA EN TU CABEZA"
         },
         28.0f);
     AddNarrativeTrigger(
@@ -1731,11 +2213,8 @@ void BaseScene::LoadExteriorDecorations()
         glm::vec3(0.0f, 0.0f, -12.2f),
         5.0f,
         StoryPhase::AnxietyActivated,
-        StoryPhase::HouseEntry,
-        {
-            "ENTRA A LA CASA",
-            "BUSCA ALGO QUE PUEDAS SACAR"
-        },
+        StoryPhase::NeedHandWash,
+        {},
         14.0f);
 
     dumpsterDropZone_.id = "basurero";
@@ -2345,6 +2824,7 @@ void BaseScene::DrawLitGeometry() const
 {
     litShader_->SetBool("useTexture", true);
     litShader_->SetFloat("specularStrength", 0.0f);
+    litShader_->SetFloat("shininess", 7.0f);
     litShader_->SetFloat("unlitFactor", 0.0f);
     litShader_->SetBool("proceduralDumpsterMaterial", false);
     litShader_->SetVec3("baseColor", glm::vec3(1.0f));
@@ -2362,6 +2842,7 @@ void BaseScene::DrawLitGeometry() const
     glActiveTexture(GL_TEXTURE0);
     floorMesh_->Draw();
     litShader_->SetBool("floorDirtEnabled", false);
+    litShader_->SetFloat("shininess", 24.0f);
 
     if (boundarySideWallMesh_ != nullptr && boundaryEndWallMesh_ != nullptr)
     {
@@ -2400,7 +2881,12 @@ void BaseScene::DrawLitGeometry() const
         litShader_->SetFloat("specularStrength", SpecularStrengthForEntity(entity.name));
         litShader_->SetFloat("unlitFactor", 0.0f);
         litShader_->SetVec3("baseColor", glm::vec3(0.92f, 0.86f, 0.72f));
-        litShader_->SetBool("proceduralDumpsterMaterial", ToLowerAscii(entity.name).find("dumpster") != std::string::npos);
+        const std::string lowerEntityName = ToLowerAscii(entity.name);
+        litShader_->SetBool(
+            "proceduralDumpsterMaterial",
+            lowerEntityName.find("dumpster") != std::string::npos
+                || lowerEntityName.find("basura") != std::string::npos
+                || lowerEntityName.find("trash") != std::string::npos);
         litShader_->SetMat4("model", BuildStaticModelMatrix(entity));
         entity.placement.model->Draw();
         litShader_->SetBool("proceduralDumpsterMaterial", false);

@@ -25,6 +25,15 @@ public:
     int Run();
 
 private:
+    struct TutorialItem
+    {
+        std::string id;
+        std::string label;
+        bool required = true;
+        bool completed = false;
+        float completedTime = 0.0f;
+    };
+
     struct PendingNavigationBuild
     {
         std::future<std::unique_ptr<IWalkableWorld>> future;
@@ -42,6 +51,9 @@ private:
     bool physicsDebugEnabled_ = false;
     bool performanceTitleEnabled_ = false;
     bool paused_ = false;
+    bool tutorialVisible_ = true;
+    float tutorialAllCompletedTime_ = -1.0f;
+    std::vector<TutorialItem> tutorialItems_;
     double displayedFps_ = 0.0;
     std::uint64_t frameIndex_ = 0;
     bool traceCurrentFrame_ = false;
@@ -51,6 +63,10 @@ private:
     void Shutdown();
     void Update();
     void Render();
+    void InitializeTutorial();
+    void MarkTutorialItemCompleted(const std::string& id);
+    void UpdateTutorial(bool interacted);
+    void RenderTutorial() const;
     void SetMouseCaptured(bool captured);
     void UpdateWindowTitle() const;
 

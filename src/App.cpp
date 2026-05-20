@@ -7,6 +7,7 @@
 #include <utility>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <thread>
@@ -303,6 +304,7 @@ bool App::Init()
         DebugLog::Info("App", "Constructing BaseScene");
         scene_ = std::make_unique<BaseScene>(assetsRoot_);
         debugOverlayRenderer_ = std::make_unique<DebugOverlayRenderer>(assetsRoot_);
+        InitializeTutorial();
         DebugLog::Info("App", "Initializing BaseScene");
         scene_->Init();
         const auto sceneInitEnd = std::chrono::steady_clock::now();
@@ -445,12 +447,14 @@ void App::Update()
     if (input_.WasKeyPressed(GLFW_KEY_ESCAPE))
     {
         paused_ = !paused_;
+        MarkTutorialItemCompleted("esc");
         DebugLog::Info("Update", "ESC pressed, paused=", paused_);
         SetMouseCaptured(!paused_);
     }
 
     if (input_.WasKeyPressed(GLFW_KEY_TAB))
     {
+        MarkTutorialItemCompleted("tab");
         DebugLog::Info("Update", "TAB pressed, toggling camera mode");
         camera_.ToggleMode();
         UpdateWindowTitle();
@@ -478,12 +482,18 @@ void App::Update()
         {
             scene_->SetPhysicsDebugFrame({});
         }
+        UpdateTutorial(false);
         return;
     }
     camera_.Update(input_);
+    bool interacted = false;
     if (input_.WasKeyPressed(GLFW_KEY_E))
     {
-        const bool interacted = scene_->TryInteract(camera_.GetPosition(), camera_.GetForward(), player_.GetPosition());
+        interacted = scene_->TryInteract(camera_.GetPosition(), camera_.GetForward(), player_.GetPosition());
+        if (interacted)
+        {
+            MarkTutorialItemCompleted("e");
+        }
         DebugLog::Info("Update", "E pressed, doorInteraction=", interacted);
     }
     if (traceCurrentFrame_)
@@ -491,6 +501,27 @@ void App::Update()
         DebugLog::Info("Update", "scene_->Update()");
     }
     scene_->Update(player_.GetSnapshot(), input_.lastFrameTime, input_.deltaTime);
+    const bool holdCancelRequested = !interacted
+        && (input_.IsKeyDown(GLFW_KEY_W)
+            || input_.IsKeyDown(GLFW_KEY_A)
+            || input_.IsKeyDown(GLFW_KEY_S)
+            || input_.IsKeyDown(GLFW_KEY_D)
+            || input_.IsKeyDown(GLFW_KEY_UP)
+            || input_.IsKeyDown(GLFW_KEY_DOWN)
+            || input_.IsKeyDown(GLFW_KEY_LEFT)
+            || input_.IsKeyDown(GLFW_KEY_RIGHT)
+            || input_.WasKeyPressed(GLFW_KEY_SPACE)
+            || input_.IsKeyDown(GLFW_KEY_LEFT_SHIFT)
+            || input_.IsKeyDown(GLFW_KEY_RIGHT_SHIFT)
+            || input_.WasKeyPressed(GLFW_KEY_TAB)
+            || input_.WasKeyPressed(GLFW_KEY_E)
+            || std::abs(input_.mouseDeltaX) + std::abs(input_.mouseDeltaY) > 1.2);
+    scene_->UpdateHoldAction(
+        holdCancelRequested,
+        camera_.GetPosition(),
+        camera_.GetForward(),
+        player_.GetPosition(),
+        input_.deltaTime);
     if (walkableWorld_ != nullptr)
     {
         walkableWorld_->SetDynamicBlockers(scene_->BuildWalkableBlockers());
@@ -502,6 +533,7 @@ void App::Update()
     player_.Update(input_, camera_.GetMovementYawDegrees());
     camera_.SetPlayerAnchor(player_.GetEyePosition());
     camera_.SetOrbitTarget(player_.GetOrbitTarget());
+    UpdateTutorial(interacted);
 
     if (scene_ != nullptr)
     {
@@ -526,6 +558,125 @@ void App::Update()
             player_.GetPosition().x, ", ",
             player_.GetPosition().y, ", ",
             player_.GetPosition().z, ")");
+    }
+}
+
+void App::InitializeTutorial()
+{
+    tutorialItems_ = {
+        TutorialItem { "wasd", "WASD     MOVERSE", true, false, 0.0f },
+        TutorialItem { "mouse", "MOUSE    MIRAR", true, false, 0.0f },
+        TutorialItem { "tab", "TAB      CAMBIAR CAMARA", true, false, 0.0f },
+        TutorialItem { "e", "E        INTERACTUAR", true, false, 0.0f },
+        TutorialItem { "space", "ESPACIO  SALTAR", true, false, 0.0f },
+        TutorialItem { "shift", "SHIFT    CORRER", true, false, 0.0f },
+        TutorialItem { "esc", "ESC      PAUSA", true, false, 0.0f }
+    };
+    tutorialVisible_ = true;
+    tutorialAllCompletedTime_ = -1.0f;
+}
+
+void App::MarkTutorialItemCompleted(const std::string& id)
+{
+    const float now = input_.lastFrameTime;
+    for (TutorialItem& item : tutorialItems_)
+    {
+        if (item.id == id && !item.completed)
+        {
+            item.completed = true;
+            item.completedTime = now;
+            DebugLog::Info("Tutorial", "completed ", id);
+            break;
+        }
+    }
+}
+
+void App::UpdateTutorial(bool interacted)
+{
+    if (!tutorialVisible_)
+    {
+        return;
+    }
+
+    if (input_.WasKeyPressed(GLFW_KEY_W)
+        || input_.WasKeyPressed(GLFW_KEY_A)
+        || input_.WasKeyPressed(GLFW_KEY_S)
+        || input_.WasKeyPressed(GLFW_KEY_D))
+    {
+        MarkTutorialItemCompleted("wasd");
+    }
+    if (std::abs(input_.mouseDeltaX) + std::abs(input_.mouseDeltaY) > 1.5)
+    {
+        MarkTutorialItemCompleted("mouse");
+    }
+    if (interacted)
+    {
+        MarkTutorialItemCompleted("e");
+    }
+    if (input_.WasKeyPressed(GLFW_KEY_SPACE))
+    {
+        MarkTutorialItemCompleted("space");
+    }
+    if (input_.WasKeyPressed(GLFW_KEY_LEFT_SHIFT) || input_.WasKeyPressed(GLFW_KEY_RIGHT_SHIFT))
+    {
+        MarkTutorialItemCompleted("shift");
+    }
+
+    const bool allRequiredCompleted = std::all_of(
+        tutorialItems_.begin(),
+        tutorialItems_.end(),
+        [](const TutorialItem& item)
+        {
+            return !item.required || item.completed;
+        });
+    if (allRequiredCompleted && tutorialAllCompletedTime_ < 0.0f)
+    {
+        tutorialAllCompletedTime_ = input_.lastFrameTime;
+    }
+    if (tutorialAllCompletedTime_ >= 0.0f && input_.lastFrameTime - tutorialAllCompletedTime_ > 4.0f)
+    {
+        tutorialVisible_ = false;
+    }
+}
+
+void App::RenderTutorial() const
+{
+    if (!tutorialVisible_ || debugOverlayRenderer_ == nullptr || tutorialItems_.empty())
+    {
+        return;
+    }
+
+    constexpr float kX = 18.0f;
+    constexpr float kY = 128.0f;
+    constexpr float kPixelSize = 2.35f;
+    constexpr float kLineHeight = 22.1f;
+    debugOverlayRenderer_->RenderText(
+        { "CONTROLES" },
+        framebufferWidth_,
+        framebufferHeight_,
+        kX,
+        kY,
+        kPixelSize,
+        glm::vec3(0.72f, 0.76f, 0.76f),
+        0.36f,
+        DebugOverlayRenderer::TextAlign::Left);
+
+    for (std::size_t index = 0; index < tutorialItems_.size(); ++index)
+    {
+        const TutorialItem& item = tutorialItems_[index];
+        const glm::vec3 color = item.completed
+            ? glm::vec3(0.32f, 1.0f, 0.46f)
+            : glm::vec3(0.86f, 0.90f, 0.90f);
+        debugOverlayRenderer_->RenderText(
+            { item.label },
+            framebufferWidth_,
+            framebufferHeight_,
+            kX,
+            kY + (static_cast<float>(index + 1u) * kLineHeight),
+            kPixelSize,
+            color,
+            0.0f,
+            DebugOverlayRenderer::TextAlign::Left);
     }
 }
 
@@ -573,13 +724,26 @@ void App::Render()
             DebugOverlayRenderer::TextAlign::Left);
 
         debugOverlayRenderer_->RenderText(
-            scene_->BuildContextMessageLines(),
+            scene_->BuildObjectiveLines(),
+            framebufferWidth_,
+            framebufferHeight_,
+            18.0f,
+            tutorialVisible_ ? 370.0f : 128.0f,
+            2.5f,
+            glm::vec3(0.88f, 0.94f, 1.0f),
+            0.42f,
+            DebugOverlayRenderer::TextAlign::Left);
+
+        RenderTutorial();
+
+        debugOverlayRenderer_->RenderText(
+            scene_->BuildRaycastPromptLines(camera_.GetPosition(), camera_.GetForward(), player_.GetPosition()),
             framebufferWidth_,
             framebufferHeight_,
             static_cast<float>(framebufferWidth_) * 0.72f,
             static_cast<float>(framebufferHeight_) * 0.42f,
             2.5f,
-            glm::vec3(0.88f, 0.94f, 1.0f),
+            glm::vec3(0.74f, 0.92f, 1.0f),
             0.42f,
             DebugOverlayRenderer::TextAlign::Left);
 

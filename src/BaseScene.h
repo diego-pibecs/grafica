@@ -34,6 +34,12 @@ public:
 
     void Init();
     void Update(const PlayerSnapshot& player, float absoluteTimeSeconds, float deltaTimeSeconds);
+    void UpdateHoldAction(
+        bool cancelRequested,
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDirection,
+        const glm::vec3& playerPosition,
+        float deltaTimeSeconds);
     void Render(const CameraController& camera, const glm::mat4& projection) const;
 
     void SetPhysicsDebugFrame(PhysicsDebugFrame frame);
@@ -41,6 +47,11 @@ public:
     bool TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition);
     [[nodiscard]] std::vector<std::string> BuildHudLines() const;
     [[nodiscard]] std::vector<std::string> BuildContextMessageLines() const;
+    [[nodiscard]] std::vector<std::string> BuildObjectiveLines() const;
+    [[nodiscard]] std::vector<std::string> BuildRaycastPromptLines(
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDirection,
+        const glm::vec3& playerPosition) const;
     [[nodiscard]] std::vector<std::string> BuildCenterMessageLines() const;
     [[nodiscard]] float GetAnxietyTintAlpha() const noexcept;
 
@@ -76,12 +87,24 @@ private:
         ExteriorStart,
         TriggerWalk,
         AnxietyActivated,
-        HouseEntry,
-        CleaningLoop,
+        NeedHandWash,
+        HandWashing,
+        HandWashedRelief,
+        NeedShower,
+        Showering,
+        ShowerRelief,
+        NeedDiscardObjects,
         DiscardLoop,
         EmptyHouse,
         DarkReflection,
         Finished
+    };
+
+    enum class HoldActionType
+    {
+        None,
+        HandWash,
+        Shower
     };
 
     struct TimedMessage
@@ -125,6 +148,15 @@ private:
         std::string id;
         glm::vec3 position { 0.0f };
         float radius = 3.0f;
+    };
+
+    struct FaucetInteraction
+    {
+        std::string id;
+        glm::vec3 position { 0.0f };
+        float radius = 1.15f;
+        bool used = false;
+        HoldActionType type = HoldActionType::HandWash;
     };
 
     enum class DoorMotionType
@@ -218,6 +250,7 @@ private:
     std::vector<InteractiveDoor> doors_;
     std::vector<NarrativeTrigger> narrativeTriggers_;
     std::vector<CarryableObject> carryableObjects_;
+    std::vector<FaucetInteraction> faucetInteractions_;
     DropZone dumpsterDropZone_;
     std::vector<PointLight> basePointLights_;
     std::vector<PointLight> pointLights_;
@@ -250,6 +283,12 @@ private:
     bool darkReflectionUnlocked_ = false;
     int carriedObjectIndex_ = -1;
     TimedMessage centerMessage_;
+    float storyPhaseStartTime_ = 0.0f;
+    HoldActionType activeHoldAction_ = HoldActionType::None;
+    std::string activeHoldTargetId_;
+    glm::vec3 activeHoldTargetPosition_ { 0.0f };
+    float holdActionProgress_ = 0.0f;
+    float holdActionDuration_ = 5.0f;
     bool tvFallActive_ = false;
     bool tvHasFallen_ = false;
     float tvFallStartTime_ = 0.0f;
@@ -306,15 +345,21 @@ private:
         std::vector<std::string> messages,
         float anxietyDelta);
     void ShowCenterMessage(std::vector<std::string> lines, float durationSeconds);
+    void SetStoryPhase(StoryPhase phase);
     void ActivateAnxiety(float delta);
     void ReduceAnxiety(float amount);
     [[nodiscard]] std::string BuildAnxietyBar(float value) const;
+    [[nodiscard]] std::string BuildHoldActionProgressLine() const;
     [[nodiscard]] bool IsPhaseAtLeast(StoryPhase phase) const noexcept;
+    [[nodiscard]] bool CarryablesEnabled() const noexcept;
     [[nodiscard]] int FindTargetedCarryable(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition) const;
     [[nodiscard]] int FindTargetedHouseLight(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition) const;
+    [[nodiscard]] int FindTargetedFaucet(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition) const;
     [[nodiscard]] bool IsPlayerNearDropZone(const glm::vec3& playerPosition) const;
+    bool TryUseFaucet(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition);
+    void CancelHoldAction();
     bool TryToggleHouseLight(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition);
-    bool TryDiscardCarriedObject(const glm::vec3& playerPosition);
+    bool TryDiscardCarriedObject(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition);
     bool TryPickupCarryable(int objectIndex);
 
     static Mesh CreateFloorMesh(GLuint textureId, const glm::vec2& halfExtents, const glm::vec2& uvTiling);
