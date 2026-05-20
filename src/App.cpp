@@ -235,6 +235,7 @@ bool App::Init()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     DebugLog::Info("App", "Creating GLFW window ", framebufferWidth_, "x", framebufferHeight_);
     window_ = glfwCreateWindow(framebufferWidth_, framebufferHeight_, "Experiencia TOC interactiva", nullptr, nullptr);
@@ -443,8 +444,9 @@ void App::Update()
 
     if (input_.WasKeyPressed(GLFW_KEY_ESCAPE))
     {
-        DebugLog::Info("Update", "ESC pressed, toggling mouse capture to ", !input_.mouseCaptured);
-        SetMouseCaptured(!input_.mouseCaptured);
+        paused_ = !paused_;
+        DebugLog::Info("Update", "ESC pressed, paused=", paused_);
+        SetMouseCaptured(!paused_);
     }
 
     if (input_.WasKeyPressed(GLFW_KEY_TAB))
@@ -469,6 +471,14 @@ void App::Update()
     if (traceCurrentFrame_)
     {
         DebugLog::Info("Update", "camera_.Update()");
+    }
+    if (paused_)
+    {
+        if (scene_ != nullptr)
+        {
+            scene_->SetPhysicsDebugFrame({});
+        }
+        return;
     }
     camera_.Update(input_);
     if (input_.WasKeyPressed(GLFW_KEY_E))
@@ -539,6 +549,65 @@ void App::Render()
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     scene_->Render(camera_, projection);
+    if (debugOverlayRenderer_ != nullptr)
+    {
+        const float anxietyTintAlpha = scene_->GetAnxietyTintAlpha();
+        if (anxietyTintAlpha > 0.001f)
+        {
+            debugOverlayRenderer_->RenderFullscreenTint(
+                framebufferWidth_,
+                framebufferHeight_,
+                glm::vec3(0.75f, 0.04f, 0.03f),
+                anxietyTintAlpha);
+        }
+
+        debugOverlayRenderer_->RenderText(
+            scene_->BuildHudLines(),
+            framebufferWidth_,
+            framebufferHeight_,
+            18.0f,
+            18.0f,
+            3.0f,
+            glm::vec3(0.96f, 0.96f, 0.84f),
+            0.58f,
+            DebugOverlayRenderer::TextAlign::Left);
+
+        debugOverlayRenderer_->RenderText(
+            scene_->BuildContextMessageLines(),
+            framebufferWidth_,
+            framebufferHeight_,
+            static_cast<float>(framebufferWidth_) * 0.72f,
+            static_cast<float>(framebufferHeight_) * 0.42f,
+            2.5f,
+            glm::vec3(0.88f, 0.94f, 1.0f),
+            0.42f,
+            DebugOverlayRenderer::TextAlign::Left);
+
+        debugOverlayRenderer_->RenderText(
+            scene_->BuildCenterMessageLines(),
+            framebufferWidth_,
+            framebufferHeight_,
+            static_cast<float>(framebufferWidth_) * 0.5f,
+            static_cast<float>(framebufferHeight_) * 0.42f,
+            3.5f,
+            glm::vec3(1.0f, 0.90f, 0.80f),
+            0.55f,
+            DebugOverlayRenderer::TextAlign::Center);
+
+        if (paused_)
+        {
+            debugOverlayRenderer_->RenderText(
+                { "PAUSA" },
+                framebufferWidth_,
+                framebufferHeight_,
+                static_cast<float>(framebufferWidth_) * 0.5f,
+                static_cast<float>(framebufferHeight_) * 0.52f,
+                5.0f,
+                glm::vec3(1.0f, 1.0f, 0.86f),
+                0.64f,
+                DebugOverlayRenderer::TextAlign::Center);
+        }
+    }
     if (physicsDebugEnabled_ && debugOverlayRenderer_ != nullptr)
     {
         const PlayerSnapshot& playerSnapshot = player_.GetSnapshot();

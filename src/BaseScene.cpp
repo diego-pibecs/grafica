@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -24,8 +25,10 @@ namespace
 {
 namespace fs = std::filesystem;
 
-constexpr int kMaxPointLights = 12;
+constexpr int kMaxPointLights = 32;
 constexpr int kPointShadowTextureUnitOffset = 2;
+constexpr int kMaxPointShadowSamplers = 12;
+constexpr int kDirtTextureUnit = 15;
 
 double MillisecondsSince(const std::chrono::steady_clock::time_point& begin)
 {
@@ -43,6 +46,29 @@ std::string ToLowerAscii(std::string value)
             return static_cast<char>(std::tolower(character));
         });
     return value;
+}
+
+bool IsStrictHouseLightNodeName(const std::string& lowerName)
+{
+    return lowerName.size() == 8u
+        && lowerName.rfind("light", 0) == 0
+        && std::isdigit(static_cast<unsigned char>(lowerName[5])) != 0
+        && std::isdigit(static_cast<unsigned char>(lowerName[6])) != 0
+        && std::isdigit(static_cast<unsigned char>(lowerName[7])) != 0;
+}
+
+bool IsInteractableHouseLightNodeName(const std::string& lowerName)
+{
+    return lowerName.find("light_interactable") != std::string::npos
+        || lowerName.find("interactable_light") != std::string::npos;
+}
+
+bool IsProximityHouseLightNodeName(const std::string& lowerName)
+{
+    return lowerName.find("light_proximity") != std::string::npos
+        || lowerName.find("proximity_light") != std::string::npos
+        || lowerName.find("prox_light") != std::string::npos
+        || lowerName.find("light_prox") != std::string::npos;
 }
 
 std::vector<Vertex> MakeVertices(const std::initializer_list<float>& rawData)
@@ -121,6 +147,38 @@ bool RayIntersectsDoorBlocker(
 
     hitDistance = std::clamp(tMin, 0.0f, maxDistance);
     return hitDistance <= maxDistance;
+}
+
+bool RayIntersectsSphere(
+    const glm::vec3& rayOrigin,
+    const glm::vec3& rayDirection,
+    const glm::vec3& center,
+    float radius,
+    float maxDistance,
+    float& hitDistance)
+{
+    if (radius <= 0.0f || glm::dot(rayDirection, rayDirection) < 0.000001f)
+    {
+        return false;
+    }
+
+    const glm::vec3 direction = glm::normalize(rayDirection);
+    const glm::vec3 toCenter = center - rayOrigin;
+    const float projected = glm::dot(toCenter, direction);
+    if (projected < 0.0f || projected > maxDistance)
+    {
+        return false;
+    }
+
+    const glm::vec3 closest = rayOrigin + (direction * projected);
+    const float distanceSq = glm::dot(center - closest, center - closest);
+    if (distanceSq > radius * radius)
+    {
+        return false;
+    }
+
+    hitDistance = projected;
+    return true;
 }
 
 float DoorEasedProgress(float openProgress)
@@ -246,6 +304,11 @@ BaseScene::~BaseScene()
     }
 
     ReleasePointLightShadowMaps();
+    if (dirtTexture_ != 0)
+    {
+        glDeleteTextures(1, &dirtTexture_);
+        dirtTexture_ = 0;
+    }
     if (pointShadowFramebuffer_ != 0)
     {
         glDeleteFramebuffers(1, &pointShadowFramebuffer_);
@@ -274,6 +337,7 @@ void BaseScene::Init()
     physicsDebugRenderer_ = std::make_unique<PhysicsDebugRenderer>(assetsRoot_);
 
     const GLuint grassTexture = LoadTexture2D(assetsRoot_ / "textures" / "grass" / "Grass006_1K-JPG_Color.jpg");
+    dirtTexture_ = LoadTexture2D(assetsRoot_ / "textures" / "dirt" / "dirt.png");
     const GLuint fenceTexture = LoadTexture2D(assetsRoot_ / "textures" / "fence-texture.png");
     const float wallLengthZ = (sceneBoundsMax_.z - sceneBoundsMin_.z) + (boundaryWallThickness_ * 2.0f);
     const float wallLengthX = (sceneBoundsMax_.x - sceneBoundsMin_.x) + (boundaryWallThickness_ * 2.0f);
@@ -336,10 +400,12 @@ void BaseScene::Init()
 
 void BaseScene::Update(const PlayerSnapshot& player, float absoluteTimeSeconds, float deltaTimeSeconds)
 {
-    (void)player;
     absoluteTimeSeconds_ = absoluteTimeSeconds;
 
     const float dt = std::clamp(deltaTimeSeconds, 0.0f, 0.1f);
+    UpdateStoryState(player, dt);
+    UpdateTvFall();
+    UpdateActivePointLights(player.position);
     for (InteractiveDoor& door : doors_)
     {
         const float target = door.open ? 1.0f : 0.0f;
@@ -429,6 +495,7 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
     litShader_->SetFloat("shininess", 24.0f);
     litShader_->SetInt("texture_diffuse1", 0);
     litShader_->SetInt("shadowMap", 1);
+    litShader_->SetInt("dirtTexture", kDirtTextureUnit);
     litShader_->SetBool("shadowsEnabled", shadowMapTexture_ != 0);
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, shadowMapTexture_);
@@ -442,12 +509,27 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
 
     const int pointLightCount = static_cast<int>(activeLightCount);
     litShader_->SetInt("pointLightCount", pointLightCount);
-    litShader_->SetBool("pointShadowsEnabled", pointShadowFramebuffer_ != 0);
+    bool hasActivePointShadow = false;
+    const std::size_t shadowSamplerLightCount = std::min(activeLightCount, static_cast<std::size_t>(kMaxPointShadowSamplers));
+    for (std::size_t index = 0; index < shadowSamplerLightCount; ++index)
+    {
+        const PointLight& pointLight = pointLights_[index];
+        if (pointLight.castsShadow && pointLight.shadowCubeMap != 0)
+        {
+            hasActivePointShadow = true;
+            break;
+        }
+    }
+    litShader_->SetBool("pointShadowsEnabled", pointShadowFramebuffer_ != 0 && hasActivePointShadow);
     for (int index = 0; index < kMaxPointLights; ++index)
     {
         const std::string prefix = "pointLights[" + std::to_string(index) + "]";
-        const std::string shadowPrefix = "pointShadowMaps[" + std::to_string(index) + "]";
-        litShader_->SetInt(shadowPrefix, kPointShadowTextureUnitOffset + index);
+        const bool hasShadowSampler = index < kMaxPointShadowSamplers;
+        if (hasShadowSampler)
+        {
+            const std::string shadowPrefix = "pointShadowMaps[" + std::to_string(index) + "]";
+            litShader_->SetInt(shadowPrefix, kPointShadowTextureUnitOffset + index);
+        }
         if (index < pointLightCount)
         {
             const PointLight& pointLight = pointLights_[static_cast<std::size_t>(index)];
@@ -455,9 +537,12 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
             litShader_->SetVec3(prefix + ".color", pointLight.color);
             litShader_->SetFloat(prefix + ".intensity", pointLight.intensity);
             litShader_->SetFloat(prefix + ".range", pointLight.range);
-            litShader_->SetFloat(prefix + ".shadowStrength", pointLight.castsShadow ? 0.50f : 0.0f);
-            glActiveTexture(GL_TEXTURE0 + kPointShadowTextureUnitOffset + index);
-            glBindTexture(GL_TEXTURE_CUBE_MAP, pointLight.shadowCubeMap);
+            litShader_->SetFloat(prefix + ".shadowStrength", hasShadowSampler && pointLight.castsShadow ? 0.50f : 0.0f);
+            if (hasShadowSampler)
+            {
+                glActiveTexture(GL_TEXTURE0 + kPointShadowTextureUnitOffset + index);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, pointLight.shadowCubeMap);
+            }
         }
         else
         {
@@ -466,13 +551,16 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
             litShader_->SetFloat(prefix + ".intensity", 0.0f);
             litShader_->SetFloat(prefix + ".range", 1.0f);
             litShader_->SetFloat(prefix + ".shadowStrength", 0.0f);
-            glActiveTexture(GL_TEXTURE0 + kPointShadowTextureUnitOffset + index);
-            glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+            if (hasShadowSampler)
+            {
+                glActiveTexture(GL_TEXTURE0 + kPointShadowTextureUnitOffset + index);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+            }
         }
     }
 
     DrawLitGeometry();
-    for (int index = 0; index < kMaxPointLights; ++index)
+    for (int index = 0; index < kMaxPointShadowSamplers; ++index)
     {
         glActiveTexture(GL_TEXTURE0 + kPointShadowTextureUnitOffset + index);
         glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
@@ -483,20 +571,23 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
     const double litMs = MillisecondsSince(litBegin);
 
     const auto markerBegin = std::chrono::steady_clock::now();
-    lightMarkerShader_->Use();
-    lightMarkerShader_->SetMat4("projection", projection);
-    lightMarkerShader_->SetMat4("view", view);
-    lightMarkerShader_->SetVec3("color", glm::vec3(1.0f, 0.90f, 0.62f));
-    for (const PointLight& pointLight : pointLights_)
+    if (physicsDebugEnabled_)
     {
-        glm::mat4 lightMarkerModel = glm::translate(glm::mat4(1.0f), pointLight.position);
-        lightMarkerModel = glm::scale(lightMarkerModel, glm::vec3(0.12f));
-        lightMarkerShader_->SetMat4("model", lightMarkerModel);
-        lightMarkerMesh_->Draw();
-    }
-    if (traceRenderCall)
-    {
-        DebugLog::Info("BaseScene", "Render call ", renderCallCount, " light markers done");
+        lightMarkerShader_->Use();
+        lightMarkerShader_->SetMat4("projection", projection);
+        lightMarkerShader_->SetMat4("view", view);
+        lightMarkerShader_->SetVec3("color", glm::vec3(1.0f, 0.90f, 0.62f));
+        for (const PointLight& pointLight : pointLights_)
+        {
+            glm::mat4 lightMarkerModel = glm::translate(glm::mat4(1.0f), pointLight.position);
+            lightMarkerModel = glm::scale(lightMarkerModel, glm::vec3(0.12f));
+            lightMarkerShader_->SetMat4("model", lightMarkerModel);
+            lightMarkerMesh_->Draw();
+        }
+        if (traceRenderCall)
+        {
+            DebugLog::Info("BaseScene", "Render call ", renderCallCount, " light markers done");
+        }
     }
     const double markerMs = MillisecondsSince(markerBegin);
 
@@ -560,6 +651,85 @@ void BaseScene::Render(const CameraController& camera, const glm::mat4& projecti
 
 void BaseScene::SetPhysicsDebugFrame(PhysicsDebugFrame frame)
 {
+    for (const InteractiveDoor& door : doors_)
+    {
+        if (door.placement.model == nullptr)
+        {
+            continue;
+        }
+
+        const bool blockerActive = door.openProgress < 0.82f;
+        const WalkableBlocker blocker = BuildDoorBlocker(door);
+        const glm::vec3 color = blockerActive ? glm::vec3(1.0f, 0.12f, 0.08f) : glm::vec3(0.20f, 1.0f, 0.25f);
+        frame.points.push_back(PhysicsDebugPoint { blocker.center, color, blockerActive ? 8.0f : 6.0f });
+
+        const float yaw = glm::radians(blocker.yawDegrees);
+        const glm::vec2 xAxis(std::cos(yaw), std::sin(yaw));
+        const glm::vec2 zAxis(-std::sin(yaw), std::cos(yaw));
+        const glm::vec2 center(blocker.center.x, blocker.center.z);
+        const glm::vec2 x = xAxis * blocker.halfExtents.x;
+        const glm::vec2 z = zAxis * blocker.halfExtents.z;
+        const std::array<glm::vec2, 4> corners {
+            center - x - z,
+            center + x - z,
+            center + x + z,
+            center - x + z
+        };
+        const float y = std::max(0.08f, blocker.center.y - blocker.halfExtents.y + 0.08f);
+        for (std::size_t index = 0; index < corners.size(); ++index)
+        {
+            const glm::vec2& a = corners[index];
+            const glm::vec2& b = corners[(index + 1u) % corners.size()];
+            frame.lines.push_back(PhysicsDebugLine {
+                glm::vec3(a.x, y, a.y),
+                glm::vec3(b.x, y, b.y),
+                color,
+                color
+            });
+        }
+    }
+
+    for (const CarryableObject& object : carryableObjects_)
+    {
+        if (object.placement.model == nullptr
+            || !object.visible
+            || object.pickedUp
+            || object.discarded
+            || !object.blocksNavigation)
+        {
+            continue;
+        }
+
+        const WalkableBlocker blocker = BuildCarryableBlocker(object);
+        const glm::vec3 color(1.0f, 0.64f, 0.10f);
+        frame.points.push_back(PhysicsDebugPoint { blocker.center, color, 5.5f });
+
+        const float yaw = glm::radians(blocker.yawDegrees);
+        const glm::vec2 xAxis(std::cos(yaw), std::sin(yaw));
+        const glm::vec2 zAxis(-std::sin(yaw), std::cos(yaw));
+        const glm::vec2 center(blocker.center.x, blocker.center.z);
+        const glm::vec2 x = xAxis * blocker.halfExtents.x;
+        const glm::vec2 z = zAxis * blocker.halfExtents.z;
+        const std::array<glm::vec2, 4> corners {
+            center - x - z,
+            center + x - z,
+            center + x + z,
+            center - x + z
+        };
+        const float y = std::max(0.08f, blocker.center.y - blocker.halfExtents.y + 0.08f);
+        for (std::size_t index = 0; index < corners.size(); ++index)
+        {
+            const glm::vec2& a = corners[index];
+            const glm::vec2& b = corners[(index + 1u) % corners.size()];
+            frame.lines.push_back(PhysicsDebugLine {
+                glm::vec3(a.x, y, a.y),
+                glm::vec3(b.x, y, b.y),
+                color,
+                color
+            });
+        }
+    }
+
     physicsDebugFrame_ = std::move(frame);
 }
 
@@ -570,6 +740,25 @@ void BaseScene::SetPhysicsDebugEnabled(bool enabled)
 
 bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition)
 {
+    if (TryDiscardCarriedObject(playerPosition))
+    {
+        return true;
+    }
+
+    if (TryToggleHouseLight(rayOrigin, rayDirection, playerPosition))
+    {
+        return true;
+    }
+
+    if (carriedObjectIndex_ < 0)
+    {
+        const int carryableIndex = FindTargetedCarryable(rayOrigin, rayDirection, playerPosition);
+        if (carryableIndex >= 0 && TryPickupCarryable(carryableIndex))
+        {
+            return true;
+        }
+    }
+
     InteractiveDoor* targetedDoor = nullptr;
     float nearestHitDistance = std::numeric_limits<float>::max();
     constexpr float kMaxDoorRayDistance = 4.2f;
@@ -607,12 +796,104 @@ bool BaseScene::TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDire
     }
 
     targetedDoor->open = !targetedDoor->open;
+    const WalkableBlocker doorBlocker = BuildDoorBlocker(*targetedDoor);
+    const bool blockerActive = targetedDoor->openProgress < 0.82f;
+    DebugLog::Info(
+        "DOOR FIX",
+        "name=", targetedDoor->name,
+        " open=", targetedDoor->open,
+        " openProgress=", targetedDoor->openProgress,
+        " blockerActive=", blockerActive,
+        " passable=", !blockerActive,
+        " blocker center=(",
+        doorBlocker.center.x, ", ", doorBlocker.center.y, ", ", doorBlocker.center.z,
+        ") blocker halfExtents=(",
+        doorBlocker.halfExtents.x, ", ", doorBlocker.halfExtents.y, ", ", doorBlocker.halfExtents.z,
+        ")");
     DebugLog::Info(
         "BaseScene",
         "Door interaction ", targetedDoor->name,
         " open=", targetedDoor->open,
         " rayHit=", nearestHitDistance);
     return true;
+}
+
+std::vector<std::string> BaseScene::BuildHudLines() const
+{
+    std::vector<std::string> lines;
+    if (anxietySystemActive_)
+    {
+        const float displayedAnxiety = std::clamp(anxietyLevel_ + anxietyPulse_, 0.0f, 100.0f);
+        lines.push_back(BuildAnxietyBar(displayedAnxiety));
+    }
+    else
+    {
+        lines.push_back("ANSIEDAD [----------------] 0%");
+    }
+
+    lines.push_back("OBJETOS EN BASURERO: " + std::to_string(discardedCount_) + " / " + std::to_string(requiredDiscardCount_));
+    if (carriedObjectIndex_ >= 0 && carriedObjectIndex_ < static_cast<int>(carryableObjects_.size()))
+    {
+        lines.push_back("LLEVANDO: " + carryableObjects_[static_cast<std::size_t>(carriedObjectIndex_)].displayName);
+    }
+
+    if (darkReflectionUnlocked_)
+    {
+        lines.push_back("ZONA FINAL: DESBLOQUEADA");
+    }
+    return lines;
+}
+
+std::vector<std::string> BaseScene::BuildContextMessageLines() const
+{
+    if (carriedObjectIndex_ >= 0)
+    {
+        return { "VE AL BASURERO", "PRESIONA E PARA TIRAR EN BASURERO" };
+    }
+
+    if (currentPhase_ == StoryPhase::ExteriorStart)
+    {
+        return { "AVANZA HACIA LA CASA" };
+    }
+    if (currentPhase_ == StoryPhase::TriggerWalk || currentPhase_ == StoryPhase::AnxietyActivated)
+    {
+        return { "SIGUE EL CAMINO", "NO PUEDES QUITAR LA SENSACION" };
+    }
+    if (currentPhase_ == StoryPhase::HouseEntry)
+    {
+        return { "PRESIONA E PARA ABRIR", "ENTRA A LA CASA" };
+    }
+    if (currentPhase_ == StoryPhase::CleaningLoop || currentPhase_ == StoryPhase::DiscardLoop)
+    {
+        return { "APUNTA A UN OBJETO", "PRESIONA E PARA RECOGER", "PRESIONA E PARA ENCENDER LUZ" };
+    }
+    if (currentPhase_ == StoryPhase::DarkReflection)
+    {
+        return { "EL SILENCIO SE VUELVE VISIBLE" };
+    }
+    return {};
+}
+
+std::vector<std::string> BaseScene::BuildCenterMessageLines() const
+{
+    if (centerMessage_.remainingSeconds > 0.0f)
+    {
+        return centerMessage_.lines;
+    }
+    return {};
+}
+
+float BaseScene::GetAnxietyTintAlpha() const noexcept
+{
+    if (!anxietySystemActive_)
+    {
+        return 0.0f;
+    }
+
+    const float base = std::clamp(anxietyLevel_ / 100.0f, 0.0f, 1.0f);
+    const float pulse = 0.5f + (0.5f * std::sin(absoluteTimeSeconds_ * 4.1f));
+    const float calmFactor = darkReflectionUnlocked_ ? 0.35f : 1.0f;
+    return std::clamp(((base * 0.20f) + (pulse * base * 0.16f)) * calmFactor, 0.0f, 0.42f);
 }
 
 const std::string& BaseScene::GetActiveModelLabel() const noexcept
@@ -692,7 +973,7 @@ StaticRegionDesc BaseScene::BuildFloorCollisionRegion() const
 std::vector<WalkableBlocker> BaseScene::BuildWalkableBlockers() const
 {
     std::vector<WalkableBlocker> blockers;
-    blockers.reserve(doors_.size());
+    blockers.reserve(doors_.size() + carryableObjects_.size());
     for (const InteractiveDoor& door : doors_)
     {
         if (door.placement.model == nullptr || door.openProgress >= 0.82f)
@@ -704,7 +985,352 @@ std::vector<WalkableBlocker> BaseScene::BuildWalkableBlockers() const
         blocker.enabled = true;
         blockers.push_back(std::move(blocker));
     }
+    for (const CarryableObject& object : carryableObjects_)
+    {
+        if (object.placement.model == nullptr
+            || !object.visible
+            || object.pickedUp
+            || object.discarded
+            || !object.blocksNavigation)
+        {
+            continue;
+        }
+
+        WalkableBlocker blocker = BuildCarryableBlocker(object);
+        blocker.enabled = true;
+        blockers.push_back(std::move(blocker));
+    }
     return blockers;
+}
+
+bool BaseScene::IsPhaseAtLeast(StoryPhase phase) const noexcept
+{
+    return static_cast<int>(currentPhase_) >= static_cast<int>(phase);
+}
+
+void BaseScene::AddNarrativeTrigger(
+    const std::string& id,
+    const glm::vec3& position,
+    float radius,
+    StoryPhase requiredPhase,
+    StoryPhase nextPhase,
+    std::vector<std::string> messages,
+    float anxietyDelta)
+{
+    NarrativeTrigger trigger;
+    trigger.id = id;
+    trigger.position = position;
+    trigger.radius = radius;
+    trigger.requiredPhase = requiredPhase;
+    trigger.nextPhase = nextPhase;
+    trigger.messages = std::move(messages);
+    trigger.anxietyDelta = anxietyDelta;
+    narrativeTriggers_.push_back(std::move(trigger));
+}
+
+void BaseScene::ShowCenterMessage(std::vector<std::string> lines, float durationSeconds)
+{
+    centerMessage_.lines = std::move(lines);
+    centerMessage_.remainingSeconds = std::max(durationSeconds, 0.0f);
+}
+
+void BaseScene::ActivateAnxiety(float delta)
+{
+    anxietySystemActive_ = true;
+    anxietyLevel_ = std::clamp(anxietyLevel_ + delta, 0.0f, 100.0f);
+    contaminationLevel_ = std::clamp(contaminationLevel_ + (delta * 0.35f), 0.0f, 100.0f);
+}
+
+void BaseScene::ReduceAnxiety(float amount)
+{
+    anxietyLevel_ = std::clamp(anxietyLevel_ - amount, 0.0f, 100.0f);
+}
+
+std::string BaseScene::BuildAnxietyBar(float value) const
+{
+    constexpr int kSegments = 16;
+    const int filled = static_cast<int>(std::round(std::clamp(value, 0.0f, 100.0f) / 100.0f * static_cast<float>(kSegments)));
+    std::string bar = "ANSIEDAD [";
+    for (int index = 0; index < kSegments; ++index)
+    {
+        bar += index < filled ? '#' : '-';
+    }
+    bar += "] ";
+    bar += std::to_string(static_cast<int>(std::round(std::clamp(value, 0.0f, 100.0f))));
+    bar += "%";
+    return bar;
+}
+
+void BaseScene::UpdateStoryState(const PlayerSnapshot& player, float deltaTimeSeconds)
+{
+    if (centerMessage_.remainingSeconds > 0.0f)
+    {
+        centerMessage_.remainingSeconds = std::max(0.0f, centerMessage_.remainingSeconds - deltaTimeSeconds);
+    }
+
+    anxietyPulse_ = anxietySystemActive_
+        ? std::sin(absoluteTimeSeconds_ * 4.1f) * (5.5f + anxietyLevel_ * 0.035f)
+        : 0.0f;
+
+    for (NarrativeTrigger& trigger : narrativeTriggers_)
+    {
+        if (trigger.activated || currentPhase_ != trigger.requiredPhase)
+        {
+            continue;
+        }
+
+        const float distance = glm::length(glm::vec2(player.position.x, player.position.z) - glm::vec2(trigger.position.x, trigger.position.z));
+        if (distance > trigger.radius)
+        {
+            continue;
+        }
+
+        trigger.activated = true;
+        currentPhase_ = trigger.nextPhase;
+        ActivateAnxiety(trigger.anxietyDelta);
+        ShowCenterMessage(trigger.messages, 4.5f);
+        DebugLog::Info("Story", "Trigger activated ", trigger.id, " anxiety=", anxietyLevel_);
+    }
+
+    if (currentPhase_ == StoryPhase::HouseEntry && player.position.z < -11.0f)
+    {
+        currentPhase_ = StoryPhase::CleaningLoop;
+        ShowCenterMessage({ "DENTRO, LA URGENCIA CRECE", "RETIRA OBJETOS Y LLEVALOS AL BASURERO" }, 5.0f);
+    }
+
+    if (currentPhase_ == StoryPhase::CleaningLoop || currentPhase_ == StoryPhase::DiscardLoop)
+    {
+        const float riseRate = currentPhase_ == StoryPhase::CleaningLoop ? 4.0f : 3.0f;
+        anxietyLevel_ = std::clamp(anxietyLevel_ + (riseRate * deltaTimeSeconds), 0.0f, 100.0f);
+        if (anxietyLevel_ > 82.0f && centerMessage_.remainingSeconds <= 0.0f)
+        {
+            ShowCenterMessage({ "LA ANSIEDAD AUMENTA", "NECESITAS LIMPIAR" }, 3.0f);
+        }
+    }
+
+    if (darkReflectionUnlocked_)
+    {
+        anxietyLevel_ = std::max(0.0f, anxietyLevel_ - (10.0f * deltaTimeSeconds));
+    }
+}
+
+bool BaseScene::IsPlayerNearDropZone(const glm::vec3& playerPosition) const
+{
+    const float distance = glm::length(glm::vec2(playerPosition.x, playerPosition.z) - glm::vec2(dumpsterDropZone_.position.x, dumpsterDropZone_.position.z));
+    return distance <= dumpsterDropZone_.radius;
+}
+
+int BaseScene::FindTargetedCarryable(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition) const
+{
+    int bestIndex = -1;
+    float bestHitDistance = std::numeric_limits<float>::max();
+    constexpr float kMaxRayDistance = 7.0f;
+
+    for (std::size_t index = 0; index < carryableObjects_.size(); ++index)
+    {
+        const CarryableObject& object = carryableObjects_[index];
+        if (object.placement.model == nullptr || !object.visible || object.pickedUp || object.discarded)
+        {
+            continue;
+        }
+
+        const glm::mat4 model = BuildCarryableModelMatrix(object);
+        const glm::vec3 localCenter = object.placement.model->GetCenter();
+        const glm::vec3 worldCenter = glm::vec3(model * glm::vec4(localCenter, 1.0f));
+        const glm::vec3 scaledSize = object.placement.model->GetSize() * object.placement.scale;
+        const float radius = std::clamp(std::max({ scaledSize.x, scaledSize.y, scaledSize.z }) * 0.35f, 0.45f, 1.45f);
+        const float playerDistance = glm::length(glm::vec2(playerPosition.x, playerPosition.z) - glm::vec2(worldCenter.x, worldCenter.z));
+        if (playerDistance > object.interactRadius + radius)
+        {
+            continue;
+        }
+
+        float hitDistance = 0.0f;
+        if (RayIntersectsSphere(rayOrigin, rayDirection, worldCenter, radius, kMaxRayDistance, hitDistance)
+            && hitDistance < bestHitDistance)
+        {
+            bestHitDistance = hitDistance;
+            bestIndex = static_cast<int>(index);
+        }
+    }
+
+    return bestIndex;
+}
+
+int BaseScene::FindTargetedHouseLight(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition) const
+{
+    int bestIndex = -1;
+    float bestHitDistance = std::numeric_limits<float>::max();
+    constexpr float kMaxRayDistance = 7.0f;
+    constexpr float kLightHitRadius = 0.42f;
+    constexpr float kPlayerReach = 3.25f;
+
+    for (std::size_t index = 0; index < houseLights_.size(); ++index)
+    {
+        const HouseLight& light = houseLights_[index];
+        if (!light.interactable)
+        {
+            continue;
+        }
+
+        const float playerDistance = glm::length(playerPosition - light.position);
+        if (playerDistance > kPlayerReach)
+        {
+            continue;
+        }
+
+        float hitDistance = 0.0f;
+        if (RayIntersectsSphere(rayOrigin, rayDirection, light.position, kLightHitRadius, kMaxRayDistance, hitDistance)
+            && hitDistance < bestHitDistance)
+        {
+            bestHitDistance = hitDistance;
+            bestIndex = static_cast<int>(index);
+        }
+    }
+
+    return bestIndex;
+}
+
+bool BaseScene::TryToggleHouseLight(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition)
+{
+    const int lightIndex = FindTargetedHouseLight(rayOrigin, rayDirection, playerPosition);
+    if (lightIndex < 0)
+    {
+        return false;
+    }
+
+    HouseLight& light = houseLights_[static_cast<std::size_t>(lightIndex)];
+    light.enabled = !light.enabled;
+    UpdateActivePointLights(playerPosition);
+    ShowCenterMessage({ light.enabled ? "LUZ ENCENDIDA" : "LUZ APAGADA" }, 2.0f);
+    DebugLog::Info("HOUSE LIGHT", "interactable toggled id=", light.id, " enabled=", light.enabled);
+    return true;
+}
+
+void BaseScene::StartTvFallIfNeeded(const CarryableObject& pickedObject)
+{
+    if (tvFallActive_ || tvHasFallen_ || pickedObject.id != "livingroom_table")
+    {
+        return;
+    }
+
+    auto tvIterator = std::find_if(
+        carryableObjects_.begin(),
+        carryableObjects_.end(),
+        [](const CarryableObject& object)
+        {
+            return object.id == "livingroom_tv";
+        });
+    if (tvIterator == carryableObjects_.end()
+        || !tvIterator->visible
+        || tvIterator->pickedUp
+        || tvIterator->discarded
+        || tvIterator->placement.model == nullptr)
+    {
+        return;
+    }
+
+    const glm::vec3 tvLocalSize = tvIterator->localMax - tvIterator->localMin;
+    const float dropDistance = std::clamp(tvLocalSize.y * tvIterator->placement.scale * 1.35f, 0.45f, 1.10f);
+    tvFallActive_ = true;
+    tvFallStartTime_ = absoluteTimeSeconds_;
+    tvFallStartPosition_ = tvIterator->worldPosition;
+    tvFallTargetPosition_ = tvIterator->worldPosition - glm::vec3(0.0f, dropDistance, 0.0f);
+    DebugLog::Info(
+        "CARRY",
+        "tv fall triggered by=", pickedObject.id,
+        " dropDistance=", dropDistance,
+        " startY=", tvFallStartPosition_.y,
+        " targetY=", tvFallTargetPosition_.y);
+}
+
+void BaseScene::UpdateTvFall()
+{
+    if (!tvFallActive_)
+    {
+        return;
+    }
+
+    auto tvIterator = std::find_if(
+        carryableObjects_.begin(),
+        carryableObjects_.end(),
+        [](const CarryableObject& object)
+        {
+            return object.id == "livingroom_tv";
+        });
+    if (tvIterator == carryableObjects_.end() || !tvIterator->visible || tvIterator->pickedUp || tvIterator->discarded)
+    {
+        tvFallActive_ = false;
+        return;
+    }
+
+    constexpr float kTvFallDurationSeconds = 0.65f;
+    const float t = std::clamp((absoluteTimeSeconds_ - tvFallStartTime_) / kTvFallDurationSeconds, 0.0f, 1.0f);
+    const float eased = t * t * (3.0f - (2.0f * t));
+    tvIterator->worldPosition = glm::mix(tvFallStartPosition_, tvFallTargetPosition_, eased);
+    if (t >= 1.0f)
+    {
+        tvFallActive_ = false;
+        tvHasFallen_ = true;
+        DebugLog::Info("CARRY", "tv fall completed finalY=", tvIterator->worldPosition.y);
+    }
+}
+
+bool BaseScene::TryPickupCarryable(int objectIndex)
+{
+    if (objectIndex < 0 || objectIndex >= static_cast<int>(carryableObjects_.size()) || carriedObjectIndex_ >= 0)
+    {
+        return false;
+    }
+
+    CarryableObject& object = carryableObjects_[static_cast<std::size_t>(objectIndex)];
+    if (!object.visible || object.pickedUp || object.discarded)
+    {
+        return false;
+    }
+
+    object.pickedUp = true;
+    object.carried = true;
+    object.visible = false;
+    object.blocksNavigation = false;
+    carriedObjectIndex_ = objectIndex;
+    StartTvFallIfNeeded(object);
+    if (currentPhase_ == StoryPhase::HouseEntry || currentPhase_ == StoryPhase::AnxietyActivated)
+    {
+        currentPhase_ = StoryPhase::CleaningLoop;
+    }
+    ShowCenterMessage({ "LLEVANDO: " + object.displayName, "LLEVALO AL BASURERO" }, 3.0f);
+    ReduceAnxiety(8.0f);
+    DebugLog::Info("CARRY", "picked object id=", object.id, " visible=", object.visible, " original house element hidden=true");
+    return true;
+}
+
+bool BaseScene::TryDiscardCarriedObject(const glm::vec3& playerPosition)
+{
+    if (carriedObjectIndex_ < 0 || !IsPlayerNearDropZone(playerPosition))
+    {
+        return false;
+    }
+
+    CarryableObject& object = carryableObjects_[static_cast<std::size_t>(carriedObjectIndex_)];
+    object.carried = false;
+    object.discarded = true;
+    object.visible = false;
+    object.blocksNavigation = false;
+    carriedObjectIndex_ = -1;
+    discardedCount_ += object.requiredForEmptyHouse ? 1 : 0;
+    currentPhase_ = StoryPhase::DiscardLoop;
+    ReduceAnxiety(18.0f);
+    ShowCenterMessage({ "ALIVIO TEMPORAL", "EL ESPACIO SE VACIA" }, 3.2f);
+    DebugLog::Info("CARRY", "discarded id=", object.id, " visible=", object.visible, " discarded=", discardedCount_, "/", requiredDiscardCount_);
+
+    if (discardedCount_ >= requiredDiscardCount_ && !darkReflectionUnlocked_)
+    {
+        darkReflectionUnlocked_ = true;
+        currentPhase_ = StoryPhase::DarkReflection;
+        ShowCenterMessage({ "EL ESPACIO QUEDA VACIO", "LA SENSACION COMIENZA A BAJAR" }, 6.0f);
+    }
+    return true;
 }
 
 void BaseScene::LoadEntities()
@@ -712,6 +1338,23 @@ void BaseScene::LoadEntities()
     DebugLog::Info("BaseScene", "Loading scene entities");
     entities_.clear();
     doors_.clear();
+    narrativeTriggers_.clear();
+    carryableObjects_.clear();
+    carriedObjectIndex_ = -1;
+    discardedCount_ = 0;
+    cleanedCount_ = 0;
+    currentPhase_ = StoryPhase::ExteriorStart;
+    anxietyLevel_ = 0.0f;
+    tvFallActive_ = false;
+    tvHasFallen_ = false;
+    tvFallStartTime_ = 0.0f;
+    tvFallStartPosition_ = glm::vec3(0.0f);
+    tvFallTargetPosition_ = glm::vec3(0.0f);
+    anxietyPulse_ = 0.0f;
+    contaminationLevel_ = 0.0f;
+    anxietySystemActive_ = false;
+    darkReflectionUnlocked_ = false;
+    centerMessage_ = TimedMessage {};
     staticCollisionSources_.clear();
     LoadHouseDemo();
     LoadExteriorDecorations();
@@ -720,7 +1363,9 @@ void BaseScene::LoadEntities()
 void BaseScene::ConfigureSceneLights()
 {
     ReleasePointLightShadowMaps();
+    basePointLights_.clear();
     pointLights_.clear();
+    houseLights_.clear();
 
     for (const SceneEntity& entity : entities_)
     {
@@ -736,8 +1381,8 @@ void BaseScene::ConfigureSceneLights()
         pointLight.color = glm::vec3(1.0f, 0.88f, 0.64f);
         pointLight.intensity = 7.8f;
         pointLight.range = 10.8f;
-        pointLight.castsShadow = true;
-        pointLights_.push_back(pointLight);
+        pointLight.castsShadow = false;
+        basePointLights_.push_back(pointLight);
     }
 
     auto houseIterator = std::find_if(
@@ -749,35 +1394,95 @@ void BaseScene::ConfigureSceneLights()
         });
     if (houseIterator != entities_.end() && houseIterator->placement.model != nullptr)
     {
-        const glm::vec3 localMin = houseIterator->placement.model->GetMinBounds();
-        const glm::vec3 localMax = houseIterator->placement.model->GetMaxBounds();
-        const glm::vec3 localSize = localMax - localMin;
         const glm::mat4 houseTransform = BuildStaticModelMatrix(*houseIterator);
 
-        auto addHousePointLight = [&](const std::string& label, const glm::vec3& localPosition, const glm::vec3& color, float intensity, float range)
+        std::size_t normalLightCount = 0;
+        std::size_t proximityLightCount = 0;
+        std::size_t interactableLightCount = 0;
+
+        auto addHouseLight = [&](const std::string& id, const glm::vec3& localPosition, bool interactable, bool proximity)
         {
-            PointLight pointLight;
-            pointLight.label = label;
-            pointLight.position = glm::vec3(houseTransform * glm::vec4(localPosition, 1.0f));
-            pointLight.color = color;
-            pointLight.intensity = intensity;
-            pointLight.range = range;
-            pointLights_.push_back(pointLight);
+            HouseLight houseLight;
+            houseLight.id = id;
+            houseLight.position = glm::vec3(houseTransform * glm::vec4(localPosition, 1.0f));
+            houseLight.color = proximity ? glm::vec3(1.0f, 0.78f, 0.56f) : glm::vec3(1.0f, 0.84f, 0.62f);
+            houseLight.intensity = interactable ? 2.10f : (proximity ? 1.25f : 2.15f);
+            houseLight.range = interactable ? 5.8f : (proximity ? 4.7f : 8.0f);
+            houseLight.activationDistance = interactable ? 8.5f : (proximity ? 8.5f : 120.0f);
+            houseLight.enabled = !interactable;
+            houseLight.interactable = interactable;
+            houseLight.proximity = proximity;
+            houseLights_.push_back(houseLight);
         };
 
-        const auto lerpLocal = [&](float xFactor, float yFactor, float zFactor)
+        for (const Model::NamedNode& node : houseIterator->placement.model->GetNamedNodes())
         {
-            return glm::vec3(
-                glm::mix(localMin.x, localMax.x, xFactor),
-                glm::mix(localMin.y, localMax.y, yFactor),
-                glm::mix(localMin.z, localMax.z, zFactor));
-        };
+            const std::string lowerNodeName = ToLowerAscii(node.name);
+            const bool strictAutoLight = IsStrictHouseLightNodeName(lowerNodeName);
+            const bool interactableLight = IsInteractableHouseLightNodeName(lowerNodeName);
+            const bool proximityLight = IsProximityHouseLightNodeName(lowerNodeName);
+            if (!strictAutoLight && !interactableLight && !proximityLight)
+            {
+                continue;
+            }
 
-        addHousePointLight("house-lamp-entry", lerpLocal(0.34f, 0.69f, 0.30f), glm::vec3(1.0f, 0.82f, 0.64f), 2.2f, 5.6f);
-        addHousePointLight("house-lamp-hall", lerpLocal(0.53f, 0.71f, 0.46f), glm::vec3(1.0f, 0.84f, 0.68f), 2.1f, 5.2f);
-        addHousePointLight("house-lamp-living", lerpLocal(0.68f, 0.70f, 0.70f), glm::vec3(1.0f, 0.83f, 0.66f), 2.4f, 5.8f);
-        addHousePointLight("house-lamp-kitchen", lerpLocal(0.30f, 0.70f, 0.74f), glm::vec3(0.98f, 0.80f, 0.62f), 2.0f, 5.2f);
+            const glm::vec3 localPosition = glm::vec3(node.transform * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+            normalLightCount += strictAutoLight ? 1u : 0u;
+            proximityLightCount += proximityLight ? 1u : 0u;
+            interactableLightCount += interactableLight ? 1u : 0u;
+            DebugLog::Info(
+                "HOUSE LIGHT",
+                "node=", node.name,
+                " accepted=", strictAutoLight,
+                " proximity=", proximityLight,
+                " interactable=", interactableLight,
+                " local=(",
+                localPosition.x, ", ", localPosition.y, ", ", localPosition.z, ")");
+            addHouseLight(lowerNodeName, localPosition, interactableLight, proximityLight);
+        }
+        DebugLog::Info(
+            "HOUSE LIGHT",
+            "summary normalLight###=", normalLightCount,
+            " proximity=", proximityLightCount,
+            " interactable=", interactableLightCount);
     }
+
+    UpdateActivePointLights(playerSpawnPosition_);
+    const std::size_t activeRegularHouseLights = static_cast<std::size_t>(std::count_if(
+        houseLights_.begin(),
+        houseLights_.end(),
+        [](const HouseLight& light)
+        {
+            return light.active && !light.proximity && !light.interactable;
+        }));
+    const std::size_t activeProximityHouseLights = static_cast<std::size_t>(std::count_if(
+        houseLights_.begin(),
+        houseLights_.end(),
+        [](const HouseLight& light)
+        {
+            return light.active && light.proximity;
+        }));
+    const std::size_t activeInteractableHouseLights = static_cast<std::size_t>(std::count_if(
+        houseLights_.begin(),
+        houseLights_.end(),
+        [](const HouseLight& light)
+        {
+            return light.active && light.interactable;
+        }));
+    DebugLog::Info(
+        "LIGHTS",
+        "detected light###=", static_cast<int>(std::count_if(
+            houseLights_.begin(),
+            houseLights_.end(),
+            [](const HouseLight& light)
+            {
+                return !light.proximity && !light.interactable;
+            })),
+        " active regular=", activeRegularHouseLights,
+        " active proximity=", activeProximityHouseLights,
+        " active interactable=", activeInteractableHouseLights,
+        " submitted to shader=", pointLights_.size(),
+        " / ", kMaxPointLights);
 
     const std::size_t shadowCastingPointLights = static_cast<std::size_t>(std::count_if(
         pointLights_.begin(),
@@ -797,10 +1502,67 @@ void BaseScene::ConfigureSceneLights()
         ") groundAmbient=(",
         ambientGroundColor_.x, ", ", ambientGroundColor_.y, ", ", ambientGroundColor_.z,
         ") pointLights=", pointLights_.size(),
+        " houseLightsAvailable=", houseLights_.size(),
         " shadowPointLights=", shadowCastingPointLights,
         " pointShadowResolution=", pointShadowResolution_);
     AllocatePointLightShadowMaps();
     pointShadowMapsDirty_ = true;
+}
+
+void BaseScene::UpdateActivePointLights(const glm::vec3& playerPosition)
+{
+    constexpr std::size_t kMaxTotalActivePointLights = static_cast<std::size_t>(kMaxPointLights);
+
+    pointLights_ = basePointLights_;
+    for (HouseLight& light : houseLights_)
+    {
+        light.active = false;
+    }
+
+    std::vector<std::size_t> candidates;
+    candidates.reserve(houseLights_.size());
+    for (std::size_t index = 0; index < houseLights_.size(); ++index)
+    {
+        const HouseLight& light = houseLights_[index];
+        if (!light.enabled)
+        {
+            continue;
+        }
+
+        const float distance = glm::length(playerPosition - light.position);
+        if (distance <= light.activationDistance)
+        {
+            candidates.push_back(index);
+        }
+    }
+
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [&](std::size_t lhs, std::size_t rhs)
+        {
+            return glm::length(playerPosition - houseLights_[lhs].position)
+                < glm::length(playerPosition - houseLights_[rhs].position);
+        });
+
+    for (std::size_t index : candidates)
+    {
+        if (pointLights_.size() >= kMaxTotalActivePointLights)
+        {
+            break;
+        }
+
+        HouseLight& houseLight = houseLights_[index];
+        PointLight pointLight;
+        pointLight.label = houseLight.id;
+        pointLight.position = houseLight.position;
+        pointLight.color = houseLight.color;
+        pointLight.intensity = houseLight.intensity;
+        pointLight.range = houseLight.range;
+        pointLight.castsShadow = false;
+        pointLights_.push_back(pointLight);
+        houseLight.active = true;
+    }
 }
 
 void BaseScene::LoadHouseDemo()
@@ -834,6 +1596,7 @@ void BaseScene::LoadHouseDemo()
     RegisterStaticCollisionSource(houseEntity);
 
     LoadHouseDoors(houseEntity);
+    LoadHouseCarryableObjects(houseEntity);
     entities_.push_back(std::move(houseEntity));
     playerSpawnPosition_ = glm::vec3(0.0f, 0.0f, sceneBoundsMax_.z - 10.0f);
     playerSpawnYawDegrees_ = -90.0f;
@@ -886,7 +1649,7 @@ void BaseScene::LoadExteriorDecorations()
         DecorationDesc { "rock-right-house", assetsRoot_ / "models" / "rocks" / "SM_Rocks_05.fbx", glm::vec3(7.0f, 0.0f, -25.0f), 72.0f, 1.7f, false },
         DecorationDesc { "street-light-start", assetsRoot_ / "models" / "street-light" / "source" / "Street Light" / "SM Street Light.fbx", glm::vec3(11.0f, 0.0f, 25.0f), -90.0f, 5.8f, true },
         DecorationDesc { "street-light-mid", assetsRoot_ / "models" / "street-light" / "source" / "Street Light" / "SM Street Light.fbx", glm::vec3(-11.0f, 0.0f, -4.0f), 90.0f, 5.5f, true },
-        DecorationDesc { "dumpster-left", assetsRoot_ / "models" / "dumpster.fbx", glm::vec3(-11.5f, 0.0f, 12.0f), 88.0f, 2.8f, false },
+        DecorationDesc { "dumpster-left", assetsRoot_ / "models" / "dumpster.fbx", glm::vec3(-13.35f, 0.0f, -7.74f), 178.0f, 2.8f, false },
         DecorationDesc { "flower-left-house", assetsRoot_ / "models" / "flower" / "source" / "x3.fbx", glm::vec3(-8.4f, 0.0f, -5.0f), 12.0f, 1.2f, true },
         DecorationDesc { "flower-right-house", assetsRoot_ / "models" / "flower" / "source" / "x3.fbx", glm::vec3(8.4f, 0.0f, -5.5f), -18.0f, 1.2f, true },
         DecorationDesc { "bush-back-right", assetsRoot_ / "models" / "bushes" / "BushWithBerrys03.fbx", glm::vec3(10.8f, 0.0f, -28.0f), 31.0f, 1.7f, true }
@@ -908,8 +1671,76 @@ void BaseScene::LoadExteriorDecorations()
             decoration.targetSize,
             0.0f,
             decoration.normalizeToHeight,
-            true);
+            true,
+            ToLowerAscii(decoration.name).find("flower") == std::string::npos
+                && ToLowerAscii(decoration.name).find("bush") == std::string::npos);
     }
+
+    AddStaticSceneEntity(
+        "detonante-sangre",
+        assetsRoot_ / "models" / "blood-spattered" / "source" / "sangre.fbx",
+        glm::vec3(-2.7f, 0.02f, 13.4f),
+        8.0f,
+        4.2f,
+        0.0f,
+        false,
+        true);
+    AddStaticSceneEntity(
+        "detonante-sleeping-bag-mummy",
+        assetsRoot_ / "models" / "nuevos" / "sleeping bag" / "FBX" / "sleeping bag Mummy.fbx",
+        glm::vec3(3.7f, 0.0f, 8.8f),
+        -28.0f,
+        3.1f,
+        0.0f,
+        false,
+        true);
+    AddStaticSceneEntity(
+        "basura-inicial",
+        assetsRoot_ / "models" / "trash-bag" / "Trash_Bag_Pack_ve2hddjga_High.fbx",
+        glm::vec3(-4.8f, 0.0f, 5.4f),
+        34.0f,
+        2.1f,
+        0.0f,
+        false,
+        true);
+
+    AddNarrativeTrigger(
+        "trigger_blood_spot",
+        glm::vec3(-2.7f, 0.0f, 13.4f),
+        3.2f,
+        StoryPhase::ExteriorStart,
+        StoryPhase::TriggerWalk,
+        {
+            "ALGO EN EL AMBIENTE SE SIENTE CONTAMINADO",
+            "LA SENSACION NO DESAPARECE"
+        },
+        34.0f);
+    AddNarrativeTrigger(
+        "trigger_body_or_scene",
+        glm::vec3(3.7f, 0.0f, 8.8f),
+        3.5f,
+        StoryPhase::TriggerWalk,
+        StoryPhase::AnxietyActivated,
+        {
+            "LA IMAGEN SE QUEDA EN TU CABEZA",
+            "NECESITAS LIMPIAR"
+        },
+        28.0f);
+    AddNarrativeTrigger(
+        "trigger_house_threshold",
+        glm::vec3(0.0f, 0.0f, -12.2f),
+        5.0f,
+        StoryPhase::AnxietyActivated,
+        StoryPhase::HouseEntry,
+        {
+            "ENTRA A LA CASA",
+            "BUSCA ALGO QUE PUEDAS SACAR"
+        },
+        14.0f);
+
+    dumpsterDropZone_.id = "basurero";
+    dumpsterDropZone_.position = glm::vec3(-13.35f, 0.0f, -7.74f);
+    dumpsterDropZone_.radius = 3.4f;
 
     DebugLog::Info(
         "BaseScene",
@@ -919,10 +1750,12 @@ void BaseScene::LoadExteriorDecorations()
 
 void BaseScene::LoadHouseDoors(const SceneEntity& houseEntity)
 {
-    const std::array<fs::path, 3> doorPaths {
+    const std::array<fs::path, 5> doorPaths {
         assetsRoot_ / "models" / "house" / "source" / "garage_door.fbx",
         assetsRoot_ / "models" / "house" / "source" / "living-room_door.fbx",
-        assetsRoot_ / "models" / "house" / "source" / "kitchen_door.fbx"
+        assetsRoot_ / "models" / "house" / "source" / "kitchen_door.fbx",
+        assetsRoot_ / "models" / "house" / "source" / "bedroom_door.fbx",
+        assetsRoot_ / "models" / "house" / "source" / "bathroom_door.fbx"
     };
 
     for (const fs::path& path : doorPaths)
@@ -963,8 +1796,7 @@ void BaseScene::LoadHouseDoors(const SceneEntity& houseEntity)
         }
 
         const std::string lowerName = ToLowerAscii(door.name);
-        if (lowerName.find("kitchen") == std::string::npos
-            && lowerName.find("garage") == std::string::npos)
+        if (lowerName.find("living-room") != std::string::npos)
         {
             door.motionType = DoorMotionType::Slide;
             door.openAngleDegrees = 0.0f;
@@ -974,6 +1806,19 @@ void BaseScene::LoadHouseDoors(const SceneEntity& houseEntity)
             door.localSlideDirection = localSize.x >= localSize.z
                 ? glm::vec3(1.0f, 0.0f, 0.0f)
                 : glm::vec3(0.0f, 0.0f, 1.0f);
+        }
+        else if (lowerName.find("bedroom") != std::string::npos)
+        {
+            if (localSize.x >= localSize.z)
+            {
+                door.localHinge.x = door.localMax.x;
+            }
+            else
+            {
+                door.localHinge.z = door.localMax.z;
+            }
+            door.openAngleDegrees = 92.0f;
+            door.interactRadius = 1.9f;
         }
         else
         {
@@ -990,6 +1835,78 @@ void BaseScene::LoadHouseDoors(const SceneEntity& houseEntity)
     }
 }
 
+void BaseScene::LoadHouseCarryableObjects(const SceneEntity& houseEntity)
+{
+    struct CarryableDesc
+    {
+        const char* id;
+        const char* displayName;
+        fs::path path;
+        bool required;
+    };
+
+    const fs::path elementsRoot = assetsRoot_ / "models" / "house" / "source" / "houseElements";
+    const std::array<CarryableDesc, 11> carryables {
+        CarryableDesc { "dinning_chair01", "SILLA", elementsRoot / "dinning_chair01.fbx", true },
+        CarryableDesc { "dinning_chair02", "SILLA", elementsRoot / "dinning_chair02.fbx", true },
+        CarryableDesc { "dinning_chair03", "SILLA", elementsRoot / "dinning_chair03.fbx", true },
+        CarryableDesc { "dinning_chair04", "SILLA", elementsRoot / "dinning_chair04.fbx", true },
+        CarryableDesc { "dinning_table", "MESA", elementsRoot / "dinning_table.fbx", true },
+        CarryableDesc { "livingroom_chair01", "SILLON", elementsRoot / "livingroom_chair01.fbx", true },
+        CarryableDesc { "livingroom_chair02", "SILLON", elementsRoot / "livingroom_chair02.fbx", true },
+        CarryableDesc { "livingroom_cushions_big", "COJINES", elementsRoot / "livingroom_cushions_big.fbx", true },
+        CarryableDesc { "livingroom_cushions_small", "COJINES", elementsRoot / "livingroom_cushions_small.fbx", true },
+        CarryableDesc { "livingroom_table", "MESA DE SALA", elementsRoot / "livingroom_table.fbx", true },
+        CarryableDesc { "livingroom_tv", "TELEVISION", elementsRoot / "livingroom_tv.fbx", true }
+    };
+
+    for (const CarryableDesc& desc : carryables)
+    {
+        if (!fs::exists(desc.path))
+        {
+            DebugLog::Info("BaseScene", "House element asset not found, skipping ", desc.path.string());
+            continue;
+        }
+
+        CarryableObject object;
+        object.id = desc.id;
+        object.displayName = desc.displayName;
+        object.worldPosition = houseEntity.worldPosition;
+        object.worldYawDegrees = houseEntity.worldYawDegrees;
+        object.requiredForEmptyHouse = desc.required;
+        object.placement.sourcePath = desc.path;
+        object.placement.scale = houseEntity.placement.scale;
+        object.placement.rawOffset = houseEntity.placement.rawOffset;
+        object.placement.yawOffsetDegrees = houseEntity.placement.yawOffsetDegrees;
+        object.placement.model = std::make_unique<Model>(desc.path, true);
+        if (!object.placement.model->IsLoaded())
+        {
+            DebugLog::Error("BaseScene", "Failed to load house carryable ", desc.path.string());
+            continue;
+        }
+        object.localMin = object.placement.model->GetMinBounds();
+        object.localMax = object.placement.model->GetMaxBounds();
+        object.blocksNavigation = true;
+
+        DebugLog::Info("BaseScene", "Carryable loaded ", object.id, " display=", object.displayName);
+        carryableObjects_.push_back(std::move(object));
+    }
+
+    totalDiscardableObjects_ = static_cast<int>(std::count_if(
+        carryableObjects_.begin(),
+        carryableObjects_.end(),
+        [](const CarryableObject& object)
+        {
+            return object.requiredForEmptyHouse;
+        }));
+    requiredDiscardCount_ = std::max(1, static_cast<int>(std::ceil(static_cast<float>(totalDiscardableObjects_) * 0.70f)));
+    DebugLog::Info(
+        "BaseScene",
+        "House carryables loaded total=", carryableObjects_.size(),
+        " requiredForEmptyHouse=", totalDiscardableObjects_,
+        " requiredDiscardCount=", requiredDiscardCount_);
+}
+
 void BaseScene::AddStaticSceneEntity(
     const std::string& name,
     const fs::path& path,
@@ -998,7 +1915,8 @@ void BaseScene::AddStaticSceneEntity(
     float targetSize,
     float yawOffsetDegrees,
     bool normalizeToHeight,
-    bool loadTextures)
+    bool loadTextures,
+    bool registerCollision)
 {
     if (!fs::exists(path))
     {
@@ -1017,7 +1935,10 @@ void BaseScene::AddStaticSceneEntity(
         return;
     }
 
-    RegisterStaticCollisionSource(entity);
+    if (registerCollision)
+    {
+        RegisterStaticCollisionSource(entity);
+    }
     DebugLog::Info(
         "BaseScene",
         "Static decoration loaded ", name,
@@ -1118,6 +2039,15 @@ glm::mat4 BaseScene::BuildDoorModelMatrix(const InteractiveDoor& door) const
     return model;
 }
 
+glm::mat4 BaseScene::BuildCarryableModelMatrix(const CarryableObject& object) const
+{
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), object.worldPosition);
+    model = glm::rotate(model, glm::radians(object.worldYawDegrees + object.placement.yawOffsetDegrees), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::scale(model, glm::vec3(object.placement.scale));
+    model = glm::translate(model, object.placement.rawOffset);
+    return model;
+}
+
 WalkableBlocker BaseScene::BuildDoorBlocker(const InteractiveDoor& door) const
 {
     WalkableBlocker blocker;
@@ -1140,6 +2070,33 @@ WalkableBlocker BaseScene::BuildDoorBlocker(const InteractiveDoor& door) const
         std::max(localHalf.x * scaleX, 0.05f),
         std::max(localHalf.y * scaleY, 0.40f),
         std::max(localHalf.z * scaleZ, 0.05f));
+    const glm::vec3 normalizedAxisX = glm::normalize(axisX);
+    blocker.yawDegrees = glm::degrees(std::atan2(normalizedAxisX.z, normalizedAxisX.x));
+    return blocker;
+}
+
+WalkableBlocker BaseScene::BuildCarryableBlocker(const CarryableObject& object) const
+{
+    WalkableBlocker blocker;
+    blocker.name = object.id;
+    blocker.enabled = object.visible && !object.pickedUp && !object.discarded && object.blocksNavigation;
+
+    const glm::mat4 model = BuildCarryableModelMatrix(object);
+    const glm::vec3 localCenter = (object.localMin + object.localMax) * 0.5f;
+    const glm::vec3 localHalf = (object.localMax - object.localMin) * 0.5f;
+    blocker.center = glm::vec3(model * glm::vec4(localCenter, 1.0f));
+
+    const glm::vec3 axisX = glm::vec3(model * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+    const glm::vec3 axisY = glm::vec3(model * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
+    const glm::vec3 axisZ = glm::vec3(model * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
+    const float scaleX = std::max(glm::length(axisX), 0.001f);
+    const float scaleY = std::max(glm::length(axisY), 0.001f);
+    const float scaleZ = std::max(glm::length(axisZ), 0.001f);
+
+    blocker.halfExtents = glm::vec3(
+        std::clamp(localHalf.x * scaleX, 0.20f, 1.35f),
+        std::clamp(localHalf.y * scaleY, 0.35f, 1.80f),
+        std::clamp(localHalf.z * scaleZ, 0.20f, 1.35f));
     const glm::vec3 normalizedAxisX = glm::normalize(axisX);
     blocker.yawDegrees = glm::degrees(std::atan2(normalizedAxisX.z, normalizedAxisX.x));
     return blocker;
@@ -1370,6 +2327,18 @@ void BaseScene::DrawShadowCasters(const ShaderProgram& shader) const
         shader.SetMat4("model", BuildDoorModelMatrix(door));
         door.placement.model->DrawWithoutTextures();
     }
+
+    for (const CarryableObject& object : carryableObjects_)
+    {
+        if (object.placement.model == nullptr || !object.visible || object.pickedUp || object.discarded)
+        {
+            continue;
+        }
+
+        shader.SetBool("useTexture", false);
+        shader.SetMat4("model", BuildCarryableModelMatrix(object));
+        object.placement.model->DrawWithoutTextures();
+    }
 }
 
 void BaseScene::DrawLitGeometry() const
@@ -1377,9 +2346,22 @@ void BaseScene::DrawLitGeometry() const
     litShader_->SetBool("useTexture", true);
     litShader_->SetFloat("specularStrength", 0.0f);
     litShader_->SetFloat("unlitFactor", 0.0f);
+    litShader_->SetBool("proceduralDumpsterMaterial", false);
     litShader_->SetVec3("baseColor", glm::vec3(1.0f));
     litShader_->SetMat4("model", glm::mat4(1.0f));
+    litShader_->SetBool("floorDirtEnabled", dirtTexture_ != 0);
+    litShader_->SetVec3("dirtPathStart", glm::vec3(0.0f, 0.0f, 22.0f));
+    litShader_->SetVec3("dirtPathEnd", glm::vec3(-3.26f, 0.0f, -6.14f));
+    litShader_->SetFloat("dirtPathWidth", 1.55f);
+    litShader_->SetFloat("dirtPathBlend", 0.55f);
+    litShader_->SetFloat("dirtStartRadius", 2.7f);
+    litShader_->SetFloat("dirtSineAmplitude", 1.15f);
+    litShader_->SetFloat("dirtTextureScale", 0.48f);
+    glActiveTexture(GL_TEXTURE0 + kDirtTextureUnit);
+    glBindTexture(GL_TEXTURE_2D, dirtTexture_);
+    glActiveTexture(GL_TEXTURE0);
     floorMesh_->Draw();
+    litShader_->SetBool("floorDirtEnabled", false);
 
     if (boundarySideWallMesh_ != nullptr && boundaryEndWallMesh_ != nullptr)
     {
@@ -1418,8 +2400,10 @@ void BaseScene::DrawLitGeometry() const
         litShader_->SetFloat("specularStrength", SpecularStrengthForEntity(entity.name));
         litShader_->SetFloat("unlitFactor", 0.0f);
         litShader_->SetVec3("baseColor", glm::vec3(0.92f, 0.86f, 0.72f));
+        litShader_->SetBool("proceduralDumpsterMaterial", ToLowerAscii(entity.name).find("dumpster") != std::string::npos);
         litShader_->SetMat4("model", BuildStaticModelMatrix(entity));
         entity.placement.model->Draw();
+        litShader_->SetBool("proceduralDumpsterMaterial", false);
     }
 
     for (const InteractiveDoor& door : doors_)
@@ -1435,6 +2419,39 @@ void BaseScene::DrawLitGeometry() const
         litShader_->SetVec3("baseColor", glm::vec3(0.95f, 0.82f, 0.58f));
         litShader_->SetMat4("model", BuildDoorModelMatrix(door));
         door.placement.model->Draw();
+    }
+
+    for (const HouseLight& houseLight : houseLights_)
+    {
+        if (!houseLight.enabled || !houseLight.active || lightMarkerMesh_ == nullptr)
+        {
+            continue;
+        }
+
+        litShader_->SetBool("useTexture", false);
+        litShader_->SetFloat("specularStrength", 0.0f);
+        litShader_->SetFloat("unlitFactor", 1.0f);
+        litShader_->SetVec3("baseColor", houseLight.color);
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), houseLight.position);
+        model = glm::scale(model, glm::vec3(houseLight.interactable ? 0.16f : 0.11f));
+        litShader_->SetMat4("model", model);
+        lightMarkerMesh_->DrawWithoutTextures();
+    }
+    litShader_->SetFloat("unlitFactor", 0.0f);
+
+    for (const CarryableObject& object : carryableObjects_)
+    {
+        if (object.placement.model == nullptr || !object.visible || object.pickedUp || object.discarded)
+        {
+            continue;
+        }
+
+        litShader_->SetBool("useTexture", object.placement.model->HasTextures());
+        litShader_->SetFloat("specularStrength", 0.05f);
+        litShader_->SetFloat("unlitFactor", 0.0f);
+        litShader_->SetVec3("baseColor", glm::vec3(0.92f, 0.86f, 0.76f));
+        litShader_->SetMat4("model", BuildCarryableModelMatrix(object));
+        object.placement.model->Draw();
     }
 }
 

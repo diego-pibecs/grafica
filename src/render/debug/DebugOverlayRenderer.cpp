@@ -36,11 +36,14 @@ Glyph GlyphFor(char rawCharacter)
         case 'G': return { 0b01111, 0b10000, 0b10000, 0b10011, 0b10001, 0b10001, 0b01111 };
         case 'H': return { 0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 };
         case 'I': return { 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111 };
+        case 'J': return { 0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100 };
+        case 'K': return { 0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001 };
         case 'L': return { 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111 };
         case 'M': return { 0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001 };
         case 'N': return { 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001 };
         case 'O': return { 0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 };
         case 'P': return { 0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000 };
+        case 'Q': return { 0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101 };
         case 'R': return { 0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001 };
         case 'S': return { 0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110 };
         case 'T': return { 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100 };
@@ -56,6 +59,12 @@ Glyph GlyphFor(char rawCharacter)
         case '-': return { 0b00000, 0b00000, 0b00000, 0b11110, 0b00000, 0b00000, 0b00000 };
         case '+': return { 0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000 };
         case '/': return { 0b00001, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b10000 };
+        case '[': return { 0b11100, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11100 };
+        case ']': return { 0b00111, 0b00001, 0b00001, 0b00001, 0b00001, 0b00001, 0b00111 };
+        case '#': return { 0b01010, 0b01010, 0b11111, 0b01010, 0b11111, 0b01010, 0b01010 };
+        case '%': return { 0b11001, 0b11010, 0b00010, 0b00100, 0b01000, 0b01011, 0b10011 };
+        case '_': return { 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111 };
+        case '?': return { 0b11110, 0b00001, 0b00010, 0b00100, 0b00000, 0b00100, 0b00000 };
         case ' ': return { 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000 };
         default: return { 0b11111, 0b00001, 0b00010, 0b00100, 0b00000, 0b00100, 0b00000 };
     }
@@ -173,27 +182,91 @@ void DebugOverlayRenderer::UploadVertices(const std::vector<OverlayVertex>& vert
 
 void DebugOverlayRenderer::Render(const std::vector<std::string>& lines, int framebufferWidth, int framebufferHeight) const
 {
-    if (lines.empty() || framebufferWidth <= 0 || framebufferHeight <= 0)
+    RenderText(
+        lines,
+        framebufferWidth,
+        framebufferHeight,
+        18.0f,
+        18.0f,
+        3.0f,
+        glm::vec3(0.86f, 1.0f, 0.76f),
+        0.62f,
+        TextAlign::Left);
+}
+
+void DebugOverlayRenderer::RenderFullscreenTint(
+    int framebufferWidth,
+    int framebufferHeight,
+    const glm::vec3& color,
+    float alpha) const
+{
+    if (framebufferWidth <= 0 || framebufferHeight <= 0 || alpha <= 0.001f)
     {
         return;
     }
 
-    constexpr float kPixelSize = 3.0f;
-    constexpr float kLineHeight = 28.0f;
-    constexpr float kLeft = 18.0f;
-    constexpr float kTop = 18.0f;
+    shader_.Use();
+    shader_.SetMat4("view", glm::mat4(1.0f));
+    shader_.SetMat4(
+        "projection",
+        glm::ortho(0.0f, static_cast<float>(framebufferWidth), static_cast<float>(framebufferHeight), 0.0f));
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindVertexArray(vao_);
+
+    std::vector<OverlayVertex> vertices;
+    vertices.reserve(6);
+    AddQuad(vertices, 0.0f, 0.0f, static_cast<float>(framebufferWidth), static_cast<float>(framebufferHeight), color);
+    UploadVertices(vertices);
+    shader_.SetFloat("alpha", std::clamp(alpha, 0.0f, 1.0f));
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void DebugOverlayRenderer::RenderText(
+    const std::vector<std::string>& lines,
+    int framebufferWidth,
+    int framebufferHeight,
+    float x,
+    float y,
+    float pixelSize,
+    const glm::vec3& textColor,
+    float backgroundAlpha,
+    TextAlign align) const
+{
+    if (lines.empty() || framebufferWidth <= 0 || framebufferHeight <= 0 || pixelSize <= 0.0f)
+    {
+        return;
+    }
+
+    const float lineHeight = std::max(18.0f, pixelSize * 9.4f);
     constexpr float kPadding = 10.0f;
-    const glm::vec3 textColor(0.86f, 1.0f, 0.76f);
     const glm::vec3 backgroundColor(0.01f, 0.015f, 0.02f);
 
     float maxLineWidth = 0.0f;
     for (const std::string& line : lines)
     {
-        maxLineWidth = std::max(maxLineWidth, TextWidth(line, kPixelSize));
+        maxLineWidth = std::max(maxLineWidth, TextWidth(line, pixelSize));
     }
 
     const float backgroundWidth = maxLineWidth + (kPadding * 2.0f);
-    const float backgroundHeight = (static_cast<float>(lines.size()) * kLineHeight) + (kPadding * 2.0f) - 6.0f;
+    const float backgroundHeight = (static_cast<float>(lines.size()) * lineHeight) + (kPadding * 2.0f) - 6.0f;
+    float panelX = x;
+    if (align == TextAlign::Center)
+    {
+        panelX = x - (backgroundWidth * 0.5f);
+    }
+    else if (align == TextAlign::Right)
+    {
+        panelX = x - backgroundWidth;
+    }
+    panelX = std::clamp(panelX, 4.0f, std::max(4.0f, static_cast<float>(framebufferWidth) - backgroundWidth - 4.0f));
+    const float panelY = std::clamp(y, 4.0f, std::max(4.0f, static_cast<float>(framebufferHeight) - backgroundHeight - 4.0f));
 
     shader_.Use();
     shader_.SetMat4("view", glm::mat4(1.0f));
@@ -207,21 +280,34 @@ void DebugOverlayRenderer::Render(const std::vector<std::string>& lines, int fra
     glBindVertexArray(vao_);
 
     std::vector<OverlayVertex> backgroundVertices;
-    backgroundVertices.reserve(6);
-    AddQuad(backgroundVertices, kLeft - kPadding, kTop - kPadding, backgroundWidth, backgroundHeight, backgroundColor);
-    UploadVertices(backgroundVertices);
-    shader_.SetFloat("alpha", 0.62f);
-    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(backgroundVertices.size()));
+    if (backgroundAlpha > 0.001f)
+    {
+        backgroundVertices.reserve(6);
+        AddQuad(backgroundVertices, panelX, panelY, backgroundWidth, backgroundHeight, backgroundColor);
+        UploadVertices(backgroundVertices);
+        shader_.SetFloat("alpha", std::clamp(backgroundAlpha, 0.0f, 1.0f));
+        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(backgroundVertices.size()));
+    }
 
     std::vector<OverlayVertex> textVertices;
     for (std::size_t index = 0; index < lines.size(); ++index)
     {
+        const float lineWidth = TextWidth(lines[index], pixelSize);
+        float lineX = panelX + kPadding;
+        if (align == TextAlign::Center)
+        {
+            lineX = panelX + ((backgroundWidth - lineWidth) * 0.5f);
+        }
+        else if (align == TextAlign::Right)
+        {
+            lineX = panelX + backgroundWidth - kPadding - lineWidth;
+        }
         AddText(
             textVertices,
             lines[index],
-            kLeft,
-            kTop + (static_cast<float>(index) * kLineHeight),
-            kPixelSize,
+            lineX,
+            panelY + kPadding + (static_cast<float>(index) * lineHeight),
+            pixelSize,
             textColor);
     }
 

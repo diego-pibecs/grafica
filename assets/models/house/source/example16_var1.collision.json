@@ -1,0 +1,88 @@
+{
+  "rules": [
+    {
+      "pattern": "dp_pl_door_02_80x210_224",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "dp_pl_door_22_80x210_362",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "dp_pl_door_22_80x210_363",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "dp_pl_door_23_150x210_225",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "dp_pl_door_26_80x210_223",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "dp_pl_door_30_150x210_226",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "p_pl_door_02_80x210_224",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "p_pl_door_22_80x210_362",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "p_pl_door_22_80x210_363",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "p_pl_door_23_150x210_225",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "p_pl_door_26_80x210_223",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "p_pl_door_30_150x210_226",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "ignored"
+    },
+    {
+      "pattern": "endtable_07_40x40",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "managed-carryable"
+    },
+    {
+      "pattern": "p_pl_08_01_walltv",
+      "semantic": "ignore",
+      "buildMode": "box",
+      "regionId": "managed-carryable"
+    }
+  ]
+}

@@ -39,6 +39,10 @@ public:
     void SetPhysicsDebugFrame(PhysicsDebugFrame frame);
     void SetPhysicsDebugEnabled(bool enabled);
     bool TryInteract(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition);
+    [[nodiscard]] std::vector<std::string> BuildHudLines() const;
+    [[nodiscard]] std::vector<std::string> BuildContextMessageLines() const;
+    [[nodiscard]] std::vector<std::string> BuildCenterMessageLines() const;
+    [[nodiscard]] float GetAnxietyTintAlpha() const noexcept;
 
     [[nodiscard]] const std::string& GetActiveModelLabel() const noexcept;
     [[nodiscard]] glm::vec3 GetSceneBoundsMin() const noexcept;
@@ -65,6 +69,62 @@ private:
         ModelPlacement placement;
         glm::vec3 worldPosition { 0.0f };
         float worldYawDegrees = 0.0f;
+    };
+
+    enum class StoryPhase
+    {
+        ExteriorStart,
+        TriggerWalk,
+        AnxietyActivated,
+        HouseEntry,
+        CleaningLoop,
+        DiscardLoop,
+        EmptyHouse,
+        DarkReflection,
+        Finished
+    };
+
+    struct TimedMessage
+    {
+        std::vector<std::string> lines;
+        float remainingSeconds = 0.0f;
+    };
+
+    struct NarrativeTrigger
+    {
+        std::string id;
+        glm::vec3 position { 0.0f };
+        float radius = 2.0f;
+        bool activated = false;
+        StoryPhase requiredPhase = StoryPhase::ExteriorStart;
+        StoryPhase nextPhase = StoryPhase::TriggerWalk;
+        std::vector<std::string> messages;
+        float anxietyDelta = 0.0f;
+    };
+
+    struct CarryableObject
+    {
+        std::string id;
+        std::string displayName;
+        ModelPlacement placement;
+        glm::vec3 worldPosition { 0.0f };
+        float worldYawDegrees = 0.0f;
+        bool visible = true;
+        bool pickedUp = false;
+        bool carried = false;
+        bool discarded = false;
+        bool requiredForEmptyHouse = true;
+        bool blocksNavigation = true;
+        float interactRadius = 2.8f;
+        glm::vec3 localMin { 0.0f };
+        glm::vec3 localMax { 0.0f };
+    };
+
+    struct DropZone
+    {
+        std::string id;
+        glm::vec3 position { 0.0f };
+        float radius = 3.0f;
     };
 
     enum class DoorMotionType
@@ -103,6 +163,20 @@ private:
         GLuint shadowCubeMap = 0;
     };
 
+    struct HouseLight
+    {
+        std::string id;
+        glm::vec3 position { 0.0f };
+        glm::vec3 color { 1.0f, 0.84f, 0.62f };
+        float intensity = 2.0f;
+        float range = 5.2f;
+        float activationDistance = 32.0f;
+        bool enabled = true;
+        bool active = false;
+        bool interactable = false;
+        bool proximity = false;
+    };
+
     struct RenderPerfStats
     {
         std::uint64_t frameCount = 0;
@@ -139,9 +213,15 @@ private:
     float playerSpawnYawDegrees_ = -90.0f;
     GLuint skyCloudTextureA_ = 0;
     GLuint skyCloudTextureB_ = 0;
+    GLuint dirtTexture_ = 0;
     std::vector<SceneEntity> entities_;
     std::vector<InteractiveDoor> doors_;
+    std::vector<NarrativeTrigger> narrativeTriggers_;
+    std::vector<CarryableObject> carryableObjects_;
+    DropZone dumpsterDropZone_;
+    std::vector<PointLight> basePointLights_;
     std::vector<PointLight> pointLights_;
+    std::vector<HouseLight> houseLights_;
     std::vector<SceneCollisionSource> staticCollisionSources_;
     PhysicsDebugFrame physicsDebugFrame_;
     float absoluteTimeSeconds_ = 0.0f;
@@ -158,12 +238,31 @@ private:
     mutable bool shadowMapDirty_ = true;
     mutable bool pointShadowMapsDirty_ = true;
     mutable RenderPerfStats renderPerfStats_;
+    StoryPhase currentPhase_ = StoryPhase::ExteriorStart;
+    float anxietyLevel_ = 0.0f;
+    float anxietyPulse_ = 0.0f;
+    float contaminationLevel_ = 0.0f;
+    int cleanedCount_ = 0;
+    int discardedCount_ = 0;
+    int totalDiscardableObjects_ = 0;
+    int requiredDiscardCount_ = 0;
+    bool anxietySystemActive_ = false;
+    bool darkReflectionUnlocked_ = false;
+    int carriedObjectIndex_ = -1;
+    TimedMessage centerMessage_;
+    bool tvFallActive_ = false;
+    bool tvHasFallen_ = false;
+    float tvFallStartTime_ = 0.0f;
+    glm::vec3 tvFallStartPosition_ { 0.0f };
+    glm::vec3 tvFallTargetPosition_ { 0.0f };
 
     void LoadEntities();
     void LoadHouseDemo();
     void LoadExteriorDecorations();
     void LoadHouseDoors(const SceneEntity& houseEntity);
+    void LoadHouseCarryableObjects(const SceneEntity& houseEntity);
     void ConfigureSceneLights();
+    void UpdateActivePointLights(const glm::vec3& playerPosition);
     void AddStaticSceneEntity(
         const std::string& name,
         const std::filesystem::path& path,
@@ -172,7 +271,8 @@ private:
         float targetSize,
         float yawOffsetDegrees,
         bool normalizeToHeight,
-        bool loadTextures = true);
+        bool loadTextures = true,
+        bool registerCollision = true);
     void RegisterStaticCollisionSource(const SceneEntity& entity);
     void SetupPlacement(
         SceneEntity& entity,
@@ -183,7 +283,9 @@ private:
         bool loadTextures = true);
     [[nodiscard]] glm::mat4 BuildStaticModelMatrix(const SceneEntity& entity) const;
     [[nodiscard]] glm::mat4 BuildDoorModelMatrix(const InteractiveDoor& door) const;
+    [[nodiscard]] glm::mat4 BuildCarryableModelMatrix(const CarryableObject& object) const;
     [[nodiscard]] WalkableBlocker BuildDoorBlocker(const InteractiveDoor& door) const;
+    [[nodiscard]] WalkableBlocker BuildCarryableBlocker(const CarryableObject& object) const;
     [[nodiscard]] glm::mat4 BuildSunLightSpaceMatrix() const;
     [[nodiscard]] glm::vec3 ComputeStreetLightAnchor(const SceneEntity& entity) const;
     void RenderShadowMap(const glm::mat4& lightSpaceMatrix) const;
@@ -192,6 +294,28 @@ private:
     void ReleasePointLightShadowMaps();
     void DrawShadowCasters(const ShaderProgram& shader) const;
     void DrawLitGeometry() const;
+    void UpdateStoryState(const PlayerSnapshot& player, float deltaTimeSeconds);
+    void UpdateTvFall();
+    void StartTvFallIfNeeded(const CarryableObject& pickedObject);
+    void AddNarrativeTrigger(
+        const std::string& id,
+        const glm::vec3& position,
+        float radius,
+        StoryPhase requiredPhase,
+        StoryPhase nextPhase,
+        std::vector<std::string> messages,
+        float anxietyDelta);
+    void ShowCenterMessage(std::vector<std::string> lines, float durationSeconds);
+    void ActivateAnxiety(float delta);
+    void ReduceAnxiety(float amount);
+    [[nodiscard]] std::string BuildAnxietyBar(float value) const;
+    [[nodiscard]] bool IsPhaseAtLeast(StoryPhase phase) const noexcept;
+    [[nodiscard]] int FindTargetedCarryable(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition) const;
+    [[nodiscard]] int FindTargetedHouseLight(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition) const;
+    [[nodiscard]] bool IsPlayerNearDropZone(const glm::vec3& playerPosition) const;
+    bool TryToggleHouseLight(const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& playerPosition);
+    bool TryDiscardCarriedObject(const glm::vec3& playerPosition);
+    bool TryPickupCarryable(int objectIndex);
 
     static Mesh CreateFloorMesh(GLuint textureId, const glm::vec2& halfExtents, const glm::vec2& uvTiling);
     static Mesh CreateTexturedBoxMesh(

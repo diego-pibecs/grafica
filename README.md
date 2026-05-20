@@ -2,6 +2,10 @@
 
 Plantilla base en OpenGL para macOS con escena visual desacoplada del sistema de navegación y movimiento. El render queda en `OpenGL`; la importación geométrica, la construcción de navmesh, el controlador del actor y el debug viven en módulos separados.
 
+## Nota ética
+
+Esta experiencia es una representación artística y educativa del Trastorno Obsesivo-Compulsivo. No sustituye evaluación, diagnóstico ni tratamiento profesional.
+
 ## Requisitos
 
 Instala dependencias con Homebrew:

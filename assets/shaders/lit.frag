@@ -14,12 +14,22 @@ uniform vec3 groundAmbientColor;
 uniform vec3 baseColor;
 uniform sampler2D texture_diffuse1;
 uniform sampler2D shadowMap;
+uniform sampler2D dirtTexture;
 uniform bool useTexture;
 uniform bool shadowsEnabled;
 uniform bool pointShadowsEnabled;
+uniform bool floorDirtEnabled;
+uniform bool proceduralDumpsterMaterial;
 uniform float unlitFactor;
 uniform float shininess;
 uniform float specularStrength;
+uniform vec3 dirtPathStart;
+uniform vec3 dirtPathEnd;
+uniform float dirtPathWidth;
+uniform float dirtPathBlend;
+uniform float dirtStartRadius;
+uniform float dirtSineAmplitude;
+uniform float dirtTextureScale;
 uniform mat4 lightSpaceMatrix;
 uniform int pointLightCount;
 
@@ -32,9 +42,37 @@ struct PointLight
     float shadowStrength;
 };
 
-#define MAX_POINT_LIGHTS 12
+#define MAX_POINT_LIGHTS 32
+#define MAX_POINT_SHADOW_SAMPLERS 12
 uniform PointLight pointLights[MAX_POINT_LIGHTS];
-uniform samplerCube pointShadowMaps[MAX_POINT_LIGHTS];
+uniform samplerCube pointShadowMaps[MAX_POINT_SHADOW_SAMPLERS];
+
+float ComputeDirtMask(vec2 worldXZ)
+{
+    vec2 start = dirtPathStart.xz;
+    vec2 end = dirtPathEnd.xz;
+    vec2 path = end - start;
+    float pathLength = length(path);
+    if (pathLength < 0.001)
+    {
+        return 0.0;
+    }
+
+    vec2 pathDirection = path / pathLength;
+    vec2 pathSide = vec2(-pathDirection.y, pathDirection.x);
+    float t = clamp(dot(worldXZ - start, pathDirection) / pathLength, 0.0, 1.0);
+    float sineOffset = sin(t * 6.28318530718) * dirtSineAmplitude;
+    vec2 curvePoint = mix(start, end, t) + (pathSide * sineOffset);
+    float pathMask = 1.0 - smoothstep(dirtPathWidth, dirtPathWidth + dirtPathBlend, length(worldXZ - curvePoint));
+
+    float startCircleMask = 1.0 - smoothstep(dirtStartRadius, dirtStartRadius + dirtPathBlend, length(worldXZ - start));
+    return max(pathMask, startCircleMask);
+}
+
+float HashNoise(vec3 p)
+{
+    return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+}
 
 float ComputeShadow(vec3 normal, vec3 lightDir)
 {
@@ -68,7 +106,7 @@ float ComputeShadow(vec3 normal, vec3 lightDir)
 
 float ComputePointShadow(int lightIndex, PointLight light, vec3 normal, vec3 lightDir)
 {
-    if (!pointShadowsEnabled || light.shadowStrength <= 0.0)
+    if (!pointShadowsEnabled || light.shadowStrength <= 0.0 || lightIndex >= MAX_POINT_SHADOW_SAMPLERS)
     {
         return 0.0;
     }
@@ -112,6 +150,21 @@ void main()
     if (useTexture && sampled.a < 0.1)
     {
         discard;
+    }
+
+    if (floorDirtEnabled)
+    {
+        float dirtMask = ComputeDirtMask(FragPos.xz);
+        vec4 dirtSample = texture(dirtTexture, FragPos.xz * dirtTextureScale);
+        sampled.rgb = mix(sampled.rgb, dirtSample.rgb, dirtMask * dirtSample.a);
+    }
+
+    if (proceduralDumpsterMaterial)
+    {
+        float n = HashNoise(floor(FragPos * 6.0));
+        float grime = smoothstep(0.58, 1.0, HashNoise(floor(FragPos * 2.5) + vec3(3.1)));
+        vec3 base = mix(vec3(0.16, 0.22, 0.19), vec3(0.08, 0.11, 0.10), grime * 0.45);
+        sampled.rgb = base * mix(0.82, 1.12, n);
     }
 
     vec3 albedo = sampled.rgb;

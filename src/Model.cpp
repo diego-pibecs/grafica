@@ -44,6 +44,34 @@ std::string NormalizeTextureReference(std::string value)
     return value;
 }
 
+bool IsHouseDiagnosticName(const std::string& lowerName)
+{
+    constexpr std::array<const char*, 15> kNeedles {
+        "lighting",
+        "table",
+        "043203",
+        "043103",
+        "chair_35",
+        "50x50",
+        "chair7",
+        "sofa_03",
+        "300x100",
+        "legs",
+        "arms",
+        "ceiling",
+        "roof",
+        "techo",
+        "diningtable"
+    };
+    return std::any_of(
+        kNeedles.begin(),
+        kNeedles.end(),
+        [&](const char* needle)
+        {
+            return lowerName.find(needle) != std::string::npos;
+        });
+}
+
 std::string NormalizeLookupKey(const std::string& value)
 {
     std::string normalized;
@@ -276,12 +304,18 @@ const std::vector<Model::NamedBounds>& Model::GetNamedBounds() const noexcept
     return namedBounds_;
 }
 
+const std::vector<Model::NamedNode>& Model::GetNamedNodes() const noexcept
+{
+    return namedNodes_;
+}
+
 void Model::LoadModel(const std::filesystem::path& path)
 {
     DebugLog::ScopedTrace trace("Model", path.string());
     minBounds_ = glm::vec3(std::numeric_limits<float>::max());
     maxBounds_ = glm::vec3(std::numeric_limits<float>::lowest());
     namedBounds_.clear();
+    namedNodes_.clear();
     triangleKeys_.clear();
     sourceTriangleCount_ = 0;
     removedDuplicateTriangleCount_ = 0;
@@ -331,10 +365,45 @@ void Model::LoadModel(const std::filesystem::path& path)
 void Model::ProcessNode(aiNode* node, const aiScene* scene, const glm::mat4& parentTransform)
 {
     const glm::mat4 nodeTransform = parentTransform * AiToGlm(node->mTransformation);
+    if (node->mName.length > 0)
+    {
+        namedNodes_.push_back(Model::NamedNode { node->mName.C_Str(), nodeTransform });
+    }
+    if (ShouldSkipNode(node))
+    {
+        DebugLog::Info(
+            "HOUSE MESH SKIP",
+            "node=", node->mName.C_Str(),
+            " mesh=<node>",
+            " reason=duplicate carryable / explicit skip");
+        return;
+    }
 
     for (unsigned int meshIndex = 0; meshIndex < node->mNumMeshes; ++meshIndex)
     {
         aiMesh* mesh = scene->mMeshes[node->mMeshes[meshIndex]];
+        if (ShouldSkipMesh(mesh))
+        {
+            DebugLog::Info(
+                "HOUSE MESH SKIP",
+                "node=", node->mName.C_Str(),
+                " mesh=", mesh->mName.C_Str(),
+                " reason=duplicate carryable / explicit skip");
+            continue;
+        }
+        if (sourceFilename_ == "example16_var1.fbx")
+        {
+            const std::string lowerNodeName = ToLowerAscii(node->mName.C_Str());
+            const std::string lowerMeshName = ToLowerAscii(mesh->mName.C_Str());
+            if (IsHouseDiagnosticName(lowerNodeName) || IsHouseDiagnosticName(lowerMeshName))
+            {
+                DebugLog::Info(
+                    "HOUSE MESH",
+                    "node=", node->mName.C_Str(),
+                    " mesh=", mesh->mName.C_Str(),
+                    " render=true collision=true reason=processed");
+            }
+        }
         meshes_.push_back(ProcessMesh(mesh, scene, nodeTransform));
     }
 
@@ -342,6 +411,30 @@ void Model::ProcessNode(aiNode* node, const aiScene* scene, const glm::mat4& par
     {
         ProcessNode(node->mChildren[childIndex], scene, nodeTransform);
     }
+}
+
+bool Model::ShouldSkipNode(const aiNode* node) const
+{
+    if (node == nullptr || sourceFilename_ != "example16_var1.fbx")
+    {
+        return false;
+    }
+
+    const std::string nodeName = ToLowerAscii(node->mName.C_Str());
+    return nodeName.find("endtable_07_40x40") != std::string::npos
+        || nodeName.find("p_pl_08_01_walltv") != std::string::npos;
+}
+
+bool Model::ShouldSkipMesh(const aiMesh* mesh) const
+{
+    if (mesh == nullptr || sourceFilename_ != "example16_var1.fbx")
+    {
+        return false;
+    }
+
+    const std::string meshName = ToLowerAscii(mesh->mName.C_Str());
+    return meshName.find("endtable_07_40x40") != std::string::npos
+        || meshName.find("walltv") != std::string::npos;
 }
 
 Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nodeTransform)
