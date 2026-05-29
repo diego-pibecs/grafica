@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(grafica_bbb_base LANGUAGES C CXX)
+project(ExperienciaTOC LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -65,7 +65,7 @@ if(APPLE)
   target_link_libraries(soil2 PUBLIC "-framework CoreFoundation")
 endif()
 
-add_executable(grafica_bbb_base
+add_executable(ExperienciaTOC
   src/main.cpp
   src/App.cpp
   src/BaseScene.cpp
@@ -77,20 +77,20 @@ add_executable(grafica_bbb_base
   src/TextureUtils.cpp
 )
 
-target_include_directories(grafica_bbb_base PRIVATE
+target_include_directories(ExperienciaTOC PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
 )
 
-target_compile_definitions(grafica_bbb_base PRIVATE
+target_compile_definitions(ExperienciaTOC PRIVATE
   APP_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
 )
 
 if(APPLE)
-  target_compile_definitions(grafica_bbb_base PRIVATE GL_SILENCE_DEPRECATION)
+  target_compile_definitions(ExperienciaTOC PRIVATE GL_SILENCE_DEPRECATION)
 endif()
 
-target_link_libraries(grafica_bbb_base PRIVATE
+target_link_libraries(ExperienciaTOC PRIVATE
   OpenGL::GL
   ${GRAFICA_BBB_GLFW_TARGET}
   ${GRAFICA_BBB_GLEW_TARGET}
