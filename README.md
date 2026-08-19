@@ -1,48 +1,107 @@
-# Grafica BBB Base
+# Interactive Computer Graphics Portfolio
 
-Plantilla base en OpenGL para macOS pensada como punto de partida común para los dos proyectos del curso. La app arranca con una escena mínima reutilizable: suelo, iluminación puntual, el perro como personaje controlable, el gato como modelo fijo al centro, cámara híbrida (`FPS` + `Orbit`), animación procedural básica y colisión simple por entidades.
+Computer graphics projects developed in **C++17 and OpenGL**, focused on
+real-time 3D rendering, player interaction, navigation, animation, physics
+and gameplay systems.
 
-## Requisitos
+This repository contains two interactive 3D projects developed as part of
+Computer Graphics and Human-Computer Interaction coursework.
 
-Instala dependencias con Homebrew:
+## Featured Projects
 
-```bash
-brew install glfw glew glm assimp
-```
+### ⭐ Kirby's Adventure — 3D Platformer
 
-## Compilar y ejecutar
+**Branch:** `kirby-adventure`
 
-```bash
-cmake -S . -B build
-cmake --build build
-./build/bin/grafica_bbb_base
-```
+A 3D interactive platforming experience inspired by *Kirby's Adventure* and
+the Vegetable Valley level.
 
-## Controles base
+The project contains three connected gameplay areas, including a forest
+environment, an animated portal, a suspended parkour section and a final
+encounter with Whispy Woods.
 
-- `WASD` o flechas: mover al perro sobre el plano
-- Mouse: rotación de cámara
-- `Space`: salto
-- `Shift`: sprint
-- `Tab`: alternar entre `FPS` y `Orbit`
-- `Esc`: liberar o capturar cursor
-- Rueda del mouse en `Orbit`: zoom
-- `Q`: cerrar la ventana
+#### Highlights
 
-## Comportamiento base
+- Real-time 3D rendering with OpenGL
+- Third-person player controller
+- FPS and orbit camera systems
+- FBX model loading and animations
+- Collectible star system
+- Player lives, respawn and Game Over states
+- Enemy patrol and contact damage
+- Animated portal transitions
+- Parkour gameplay
+- Final boss encounter
+- Lighting, textures and shadows
+- Navigation mesh using Recast/Detour
+- Runtime debug visualization
 
-- `RedDog.obj` se usa como personaje controlable.
-- `miGato.obj` queda estático en el centro como prop bloqueante.
-- El personaje tiene `Idle`, `Walk`, `Run` y `Airborne` por animación procedural de transformación global.
-- Las colisiones usan hitboxes simples alineados a ejes para bloquear el movimiento del jugador frente a props.
+➡️ View project:
+https://github.com/diego-pibecs/computer-graphics-projects/tree/kirby-adventure
 
-## Estructura
 
-- `src/`: aplicación base, input, cámara, escena y carga de modelos
-- `assets/`: shaders, modelos y texturas reutilizables
-- `third_party/SOIL2/`: carga interna de texturas
+---
 
-## Notas
+### 🧠 OCD Interactive Experience
 
-- La escena usa un sistema de entidades configurable para que futuros modelos puedan activar o desactivar movimiento procedural y colisión.
-- La base está enfocada primero en macOS, pero el proyecto queda organizado para volver a abrir compatibilidad con Windows más adelante desde `CMake`.
+**Branch:** `ocd-interactive-experience`
+
+An educational and artistic interactive 3D experience related to
+Obsessive-Compulsive Disorder (OCD).
+
+The project explores a modular architecture where rendering, navigation,
+physics and interaction systems are kept separated.
+
+The environment contains an explorable house with interactive doors and a
+navigation system capable of handling dynamic obstacles.
+
+#### Highlights
+
+- Interactive 3D environment
+- OpenGL rendering pipeline
+- Static navigation mesh generation
+- Dynamic navigation obstacles
+- Recast & Detour integration
+- ReactPhysics3D integration
+- Kinematic character controller
+- Interactive hinged and sliding doors
+- Assimp-based geometry importing
+- Physics and navigation debug rendering
+- FPS and orbit camera modes
+
+➡️ View project:
+https://github.com/diego-pibecs/computer-graphics-projects/tree/ocd-interactive-experience
+
+
+## Tech Stack
+
+| Area | Technologies |
+|---|---|
+| Language | C++17 |
+| Graphics | OpenGL |
+| Window / Input | GLFW |
+| OpenGL Extensions | GLEW |
+| Mathematics | GLM |
+| 3D Asset Import | Assimp |
+| Textures | SOIL2 |
+| Navigation | Recast / Detour |
+| Physics | ReactPhysics3D |
+| Build System | CMake |
+
+## Architecture
+
+The projects are organized into independent systems for rendering,
+navigation, physics and asset importing.
+
+```text
+src/
+├── import/             # Geometry and model importing
+├── navigation/         # NavMesh and navigation world
+├── physics/            # Collision and character controllers
+├── render/
+│   └── debug/          # Debug visualization
+├── BaseScene.*         # Scene composition and interactions
+├── CameraController.*  # FPS / Orbit camera
+├── Model.*             # 3D model handling
+├── ShaderProgram.*     # OpenGL shaders
+└── App.*               # Application lifecycle
