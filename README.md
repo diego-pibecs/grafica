@@ -1,54 +1,118 @@
-# Grafica BBB Base
+# OCD Interactive 3D Experience
 
-Plantilla base en OpenGL para macOS con escena visual desacoplada del sistema de navegación y movimiento. El render queda en `OpenGL`; la importación geométrica, la construcción de navmesh, el controlador del actor y el debug viven en módulos separados.
+An interactive 3D environment developed in **C++17 and OpenGL**, focused on environmental interaction, physics, navigation, and character movement.
 
-## Nota ética
+<img width="331" height="206" alt="image" src="https://github.com/user-attachments/assets/302b8bdb-eb2d-4465-a95d-302d68e4bf0c" />
+<img width="331" height="207" alt="image" src="https://github.com/user-attachments/assets/caf25315-869a-430a-9019-dac09e6b2ea6" />
 
-Esta experiencia es una representación artística y educativa del Trastorno Obsesivo-Compulsivo. No sustituye evaluación, diagnóstico ni tratamiento profesional.
 
-## Requisitos
+## Overview
 
-Instala dependencias con Homebrew:
+The project presents an explorable indoor 3D environment with interactive elements and systems designed around movement, navigation, and environmental behavior.
 
-```bash
-brew install glfw glew glm assimp
+Its technical focus is the integration of graphics, physics, dynamic navigation obstacles, and interactive objects within a modular C++ architecture.
+
+## Highlights
+
+* Real-time OpenGL rendering
+* Explorable 3D environment
+* Kinematic character controller
+* Physics integration with ReactPhysics3D
+* Static navigation mesh generation
+* Dynamic navigation obstacles
+* Recast/Detour integration
+* Interactive doors
+* Hinged and sliding door behavior
+* FPS and orbit camera modes
+* Assimp-based 3D asset importing
+* Physics debug rendering
+* Navigation debug visualization
+
+## Interaction
+
+<img width="331" height="208" alt="image" src="https://github.com/user-attachments/assets/25f9649d-da89-4316-ac34-afb2e6b04d79" />
+<img width="331" height="208" alt="image" src="https://github.com/user-attachments/assets/a90fd95c-2cf8-4996-b6e3-88c21d2db868" />
+
+The environment includes interactive elements whose state can affect player movement and navigation.
+
+For example, doors and other dynamic objects can modify how the player moves through the environment while navigation and physics systems remain synchronized.
+
+## Technical Focus
+
+### Physics
+
+ReactPhysics3D is used for collision and character-related physics.
+
+### Navigation
+
+Recast and Detour provide navigation mesh generation and runtime navigation functionality.
+
+Dynamic obstacles allow parts of the environment to affect traversable areas.
+
+### Interaction
+
+Interactive objects include different door behaviors and environment elements that react to player input.
+
+### Architecture
+
+The project separates graphics, navigation, physics, importing, and debug rendering into dedicated systems.
+
+```text
+src/
+├── import/
+├── navigation/
+├── physics/
+├── render/
+│   └── debug/
+├── BaseScene.*
+├── CameraController.*
+├── Model.*
+├── ShaderProgram.*
+└── App.*
 ```
 
-`Recast Navigation`, `Detour` y `ReactPhysics3D` ya vienen vendorizados en `third_party/`, así que no hace falta instalarlos aparte.
+## Tech Stack
 
-## Compilar y ejecutar
+`C++17` · `OpenGL` · `GLFW` · `GLEW` · `GLM` · `Assimp` · `SOIL2` · `Recast/Detour` · `ReactPhysics3D` · `CMake`
+
+## Build
+
+### Requirements
+
+On macOS:
+
+```bash
+brew install cmake glfw glew glm assimp
+```
+
+Clone the repository and switch to this branch:
+
+```bash
+git clone https://github.com/diego-pibecs/computer-graphics-projects.git
+cd computer-graphics-projects
+git checkout ocd-interactive-experience
+```
+
+Build:
 
 ```bash
 cmake -S . -B build
 cmake --build build
-./build/bin/grafica_bbb_base
 ```
 
-## Controles
+Run the generated executable from the build output directory.
 
-- `WASD` o flechas: mover actor
-- Mouse: rotación de cámara
-- `Space`: salto
-- `Shift`: sprint
-- `E`: interactuar con la puerta apuntada por la cámara
-- `Tab`: alternar entre `FPS` y `Orbit`
-- `Esc`: liberar o capturar cursor
-- Rueda del mouse en `Orbit`: zoom
-- `F3`: debug de navmesh, bloqueadores dinámicos y actor
-- `Q`: cerrar la ventana
+## What I Worked On
 
-## Arquitectura actual
+This project gave me hands-on experience with:
 
-- `src/import/`: importación desacoplada de Assimp a `ImportedModelAsset`
-- `src/navigation/`: mundo caminable basado en Recast/Detour, navmesh y bloqueadores dinámicos
-- `src/physics/controller/`: controlador cinemático del actor montado sobre el navmesh
-- `src/render/debug/`: renderer OpenGL para líneas, puntos y triángulos de debug
-- `src/BaseScene.*`: escena visual, placements, puertas interactivas y fuentes de navegación
-
-## Notas
-
-- La geometría de navegación no sale del renderer ni de buffers OpenGL.
-- La casa genera una navmesh estática; las puertas no se meten en esa navmesh.
-- Las puertas son obstáculos dinámicos: cerradas bloquean, abiertas liberan paso.
-- `garage_door.fbx` y `kitchen_door.fbx` abren con bisagra; `living-room_door.fbx` es corrediza.
-- Si una puerta abre hacia el lado incorrecto, ajusta `openAngleDegrees`, `localSlideDirection` o el lado de bisagra en `BaseScene`.
+* Real-time 3D rendering
+* Physics integration
+* Character controllers
+* Navigation meshes
+* Dynamic obstacles
+* Interactive environment systems
+* Collision handling
+* Camera systems
+* Debug visualization
+* Modular C++ architecture
