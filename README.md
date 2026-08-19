@@ -1,107 +1,69 @@
 # Interactive Computer Graphics Portfolio
 
-Computer graphics projects developed in **C++17 and OpenGL**, focused on
-real-time 3D rendering, player interaction, navigation, animation, physics
-and gameplay systems.
-
-This repository contains two interactive 3D projects developed as part of
-Computer Graphics and Human-Computer Interaction coursework.
+A collection of real-time 3D projects developed in **C++17 and OpenGL**, focused on graphics programming, interaction, navigation, physics, animation, and gameplay systems.
 
 ## Featured Projects
 
-### ⭐ Kirby's Adventure — 3D Platformer
+### Kirby's Adventure — 3D Platformer
 
-**Branch:** `kirby-adventure`
+<img width="1710" height="1107" alt="Screenshot 2026-08-19 at 14 28 24" src="https://github.com/user-attachments/assets/615d47b9-451a-42af-b009-e4dcd5bb8096" />
+<img width="1710" height="1107" alt="Screenshot 2026-08-19 at 14 29 10" src="https://github.com/user-attachments/assets/05c9c934-71c2-4df0-a0ee-bb5c91213a95" />
 
-A 3D interactive platforming experience inspired by *Kirby's Adventure* and
-the Vegetable Valley level.
 
-The project contains three connected gameplay areas, including a forest
-environment, an animated portal, a suspended parkour section and a final
-encounter with Whispy Woods.
+A third-person 3D platforming project inspired by *Kirby*, featuring multiple gameplay areas, collectibles, enemies, parkour sections, scene transitions, and a boss encounter.
 
-#### Highlights
+**Key areas:**
+`OpenGL` · `C++17` · `Gameplay Programming` · `Animation` · `Recast/Detour` · `Assimp`
 
-- Real-time 3D rendering with OpenGL
-- Third-person player controller
-- FPS and orbit camera systems
-- FBX model loading and animations
-- Collectible star system
-- Player lives, respawn and Game Over states
-- Enemy patrol and contact damage
-- Animated portal transitions
-- Parkour gameplay
-- Final boss encounter
-- Lighting, textures and shadows
-- Navigation mesh using Recast/Detour
-- Runtime debug visualization
-
-➡️ View project:
-https://github.com/diego-pibecs/computer-graphics-projects/tree/kirby-adventure
-
+[View Kirby's Adventure →](https://github.com/diego-pibecs/computer-graphics-projects/tree/kirby-adventure)
 
 ---
 
-### 🧠 OCD Interactive Experience
+### OCD Interactive 3D Experience
 
-**Branch:** `ocd-interactive-experience`
+<img width="433" height="272" alt="image" src="https://github.com/user-attachments/assets/55921029-e325-4d1e-9374-ef58ab2b7fe1" />
+<img width="437" height="274" alt="image" src="https://github.com/user-attachments/assets/a0c9cab5-1867-4a6b-96eb-b38433f6f301" />
 
-An educational and artistic interactive 3D experience related to
-Obsessive-Compulsive Disorder (OCD).
 
-The project explores a modular architecture where rendering, navigation,
-physics and interaction systems are kept separated.
+An interactive 3D environment focused on exploration and environmental interaction, with character movement, physics, dynamic obstacles, and navigation systems.
 
-The environment contains an explorable house with interactive doors and a
-navigation system capable of handling dynamic obstacles.
+**Key areas:**
+`OpenGL` · `C++17` · `ReactPhysics3D` · `Recast/Detour` · `Interactive Environments`
 
-#### Highlights
+[View OCD Interactive Experience →](https://github.com/diego-pibecs/computer-graphics-projects/tree/ocd-interactive-experience)
 
-- Interactive 3D environment
-- OpenGL rendering pipeline
-- Static navigation mesh generation
-- Dynamic navigation obstacles
-- Recast & Detour integration
-- ReactPhysics3D integration
-- Kinematic character controller
-- Interactive hinged and sliding doors
-- Assimp-based geometry importing
-- Physics and navigation debug rendering
-- FPS and orbit camera modes
-
-➡️ View project:
-https://github.com/diego-pibecs/computer-graphics-projects/tree/ocd-interactive-experience
-
+---
 
 ## Tech Stack
 
-| Area | Technologies |
-|---|---|
-| Language | C++17 |
-| Graphics | OpenGL |
-| Window / Input | GLFW |
-| OpenGL Extensions | GLEW |
-| Mathematics | GLM |
-| 3D Asset Import | Assimp |
-| Textures | SOIL2 |
-| Navigation | Recast / Detour |
-| Physics | ReactPhysics3D |
-| Build System | CMake |
+| Area              | Technologies    |
+| ----------------- | --------------- |
+| Language          | C++17           |
+| Graphics          | OpenGL          |
+| Window / Input    | GLFW            |
+| OpenGL Extensions | GLEW            |
+| Mathematics       | GLM             |
+| Asset Import      | Assimp          |
+| Textures          | SOIL2           |
+| Navigation        | Recast / Detour |
+| Physics           | ReactPhysics3D  |
+| Build System      | CMake           |
 
-## Architecture
+## What This Repository Demonstrates
 
-The projects are organized into independent systems for rendering,
-navigation, physics and asset importing.
+* Real-time 3D graphics programming
+* Scene and camera systems
+* Character movement and interaction
+* Animation and gameplay state management
+* Collision and physics integration
+* Navigation meshes and dynamic obstacles
+* 3D asset importing
+* Modular C++ project organization
+* Debug visualization tools
 
-```text
-src/
-├── import/             # Geometry and model importing
-├── navigation/         # NavMesh and navigation world
-├── physics/            # Collision and character controllers
-├── render/
-│   └── debug/          # Debug visualization
-├── BaseScene.*         # Scene composition and interactions
-├── CameraController.*  # FPS / Orbit camera
-├── Model.*             # 3D model handling
-├── ShaderProgram.*     # OpenGL shaders
-└── App.*               # Application lifecycle
+## Projects
+
+| Project                    | Focus                                          | Branch                                                                                                                     |
+| -------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Kirby's Adventure          | Gameplay, animation, navigation, platforming   | [`kirby-adventure`](https://github.com/diego-pibecs/computer-graphics-projects/tree/kirby-adventure)                       |
+| OCD Interactive Experience | Physics, navigation, environmental interaction | [`ocd-interactive-experience`](https://github.com/diego-pibecs/computer-graphics-projects/tree/ocd-interactive-experience) |
